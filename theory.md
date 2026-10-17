@@ -32,6 +32,7 @@ Tags: [V] verified (source code, checkpoint, dataset card, paper, or arithmetic 
 
 ## 6. Weights and data provenance
 (URLs and sha256 of the weights and evaluation data, added as each is downloaded.)
+- Real-sidecar check: a real fAIr chip's `.aux.xml` bounds against the bounds derived from its OAM file name is pending a real fAIr chip [?].
 
 ## 7. Environment
 - Colab GPU runtime, 2026-10-18: Python 3.13.15, torch 2.11.0+cu130, torchvision 0.26.0+cu130 [V].
