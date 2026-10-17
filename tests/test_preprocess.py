@@ -1,5 +1,6 @@
 import logging
 import shutil
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -92,7 +93,7 @@ def test_mosaic_l_shape(write_oam_chip):
     assert (m.rgb[256:, 256:] == 0).all()
     np.testing.assert_array_equal(m.rgb[:256, :256], read_chip(paths[0])[0])
     minx, _, _, maxy = tile_bounds_3857(X0, Y0, 20)
-    assert m.transform_3857 * (0, 0) == pytest.approx((minx, maxy))
+    assert m.transform_3857 @ (0, 0) == pytest.approx((minx, maxy))
     centre_lat = tile_bounds_4326(X0, Y0, 20)[1]  # the row boundary is the mosaic centre
     assert m.gsd_m == pytest.approx(true_gsd(20, centre_lat))
 
@@ -100,7 +101,7 @@ def test_mosaic_l_shape(write_oam_chip):
 def test_mosaic_disjoint_and_diagonal(write_oam_chip, tmp_path):
     ms = mosaic_chips([write_oam_chip(X0 + 5, Y0), write_oam_chip(X0, Y0)])
     assert len(ms) == 2 and all(m.rgb.shape == (256, 256, 3) for m in ms)
-    assert ms[0].transform_3857 * (0, 0) == pytest.approx(tile_bounds_3857(X0, Y0, 20)[::3])
+    assert ms[0].transform_3857 @ (0, 0) == pytest.approx(tile_bounds_3857(X0, Y0, 20)[::3])
     diag = tmp_path / "diag"
     diag.mkdir()
     ms = mosaic_chips(
@@ -149,3 +150,25 @@ def test_preprocess_single_chip_contract(write_oam_chip):
     assert batch.shape == (1, 3, 800, 800) and scale.resized_width == 800
     with pytest.raises(ValueError, match="256"):
         preprocess(path, 512)
+
+
+def test_mosaic_duplicate_tile_keeps_first_and_warns(write_oam_chip, tmp_path, caplog):
+    other = tmp_path / "other"
+    other.mkdir()
+    first = write_oam_chip()
+    second = write_oam_chip(fill=77, directory=other)
+    with caplog.at_level(logging.WARNING, logger="fair_trees.preprocess"):
+        [m] = mosaic_chips([first, second])
+    assert m.rgb.shape == (256, 256, 3)
+    np.testing.assert_array_equal(m.rgb, read_chip(first)[0])
+    assert "duplicate" in caplog.text and f"{X0}-{Y0}-20" in caplog.text
+
+
+def test_malformed_sidecar_is_a_value_error_and_skipped(write_oam_chip, tmp_path, caplog):
+    path = write_oam_chip()
+    Path(f"{path}.aux.xml").write_text("<<not xml")
+    with pytest.raises(ValueError, match="sidecar"):
+        read_chip(path)
+    with caplog.at_level(logging.WARNING, logger="fair_trees.preprocess"):
+        assert mosaic_chips([path]) == []
+    assert path.name in caplog.text

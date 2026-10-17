@@ -13,8 +13,9 @@ from pyproj import Transformer
 EARTH_RADIUS_M = 6378137.0
 ORIGIN_SHIFT = math.pi * EARTH_RADIUS_M
 Z0_GSD = 2 * ORIGIN_SHIFT / 256
+MAX_ZOOM = 30
 
-_OAM_NAME = re.compile(r"^OAM-(\d+)-(\d+)-(\d+)\.(tif|tiff|png|jpg|jpeg)$", re.IGNORECASE)
+_OAM_NAME = re.compile(r"^OAM-(\d+)-(\d+)-(\d{1,2})\.(tif|tiff|png|jpg|jpeg)$", re.IGNORECASE)
 
 
 def parse_oam_name(name: str | Path) -> tuple[int, int, int] | None:
@@ -23,7 +24,7 @@ def parse_oam_name(name: str | Path) -> tuple[int, int, int] | None:
     if match is None:
         return None
     x, y, z = (int(g) for g in match.groups()[:3])
-    if not (0 <= x < 2**z and 0 <= y < 2**z):
+    if z > MAX_ZOOM or not (0 <= x < 2**z and 0 <= y < 2**z):
         return None
     return x, y, z
 
@@ -62,7 +63,10 @@ def read_sidecar_bounds(chip_path: Path) -> tuple[float, float, float, float]:
     sidecar = Path(f"{chip_path}.aux.xml")
     if not sidecar.is_file():
         raise FileNotFoundError(f"sidecar not found: {sidecar}")
-    root = ET.parse(sidecar).getroot()
+    try:
+        root = ET.parse(sidecar).getroot()
+    except ET.ParseError as exc:
+        raise ValueError(f"unreadable sidecar {sidecar}: {exc}") from exc
     gt_text = root.findtext("GeoTransform")
     if gt_text is None:
         raise ValueError(f"no GeoTransform in {sidecar}")

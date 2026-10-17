@@ -163,7 +163,11 @@ def mosaic_chips(paths: Sequence[Path], *, use_sidecar: bool = True) -> list[Mos
         except (ValueError, RasterioIOError) as exc:
             logger.warning("skipping %s: %s", path.name, exc)
             continue
-        by_zoom.setdefault(z, {})[(x, y)] = (rgb, valid)
+        tiles = by_zoom.setdefault(z, {})
+        if (x, y) in tiles:
+            logger.warning("ignoring %s: duplicate of tile %d-%d-%d already read", path.name, x, y, z)
+            continue
+        tiles[(x, y)] = (rgb, valid)
     groups = [
         (z, min(y for _, y in group), min(x for x, _ in group), group)
         for z, tiles in by_zoom.items()

@@ -31,6 +31,8 @@ MERCATOR_SRS = 'PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84"],AUTHORITY["EP
         ("OAM-8-0-3.tif", None),
         ("OAM-1-2.tif", None),
         ("chip.tif", None),
+        ("OAM-1-2-31.tif", None),
+        ("OAM-1-2-999.tif", None),
         ("OAM-1-2-3.tif.aux.xml", None),
     ],
 )
