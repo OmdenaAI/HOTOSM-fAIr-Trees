@@ -72,6 +72,8 @@ def test_bools_rejected_for_numbers(key):
         {"edge_band": 0.5},
         {"min_valid_fraction": 1.1},
         {"window_m": "abc"},
+        {"window_m": 4.9},
+        {"window_overlap": 0.95},
     ],
 )
 def test_inference_ranges(hp):

@@ -74,7 +74,10 @@ def predict_session(
     paths = [input_images] if input_images.is_file() else sorted(input_images.iterdir())
     mosaics = mosaic_chips(paths)
     if len({m.z for m in mosaics}) > 1:
-        logger.warning("Chips span several zoom levels; each tile group is predicted separately")
+        logger.warning(
+            "Chips span several zoom levels %s; each tile group is predicted separately",
+            sorted({m.z for m in mosaics}),
+        )
 
     run = ort_run_fn(session)
     rings: list = []

@@ -176,8 +176,8 @@ def parse_inference_params(params: Mapping | None) -> InferenceParams:
             for name in InferenceParams.__dataclass_fields__
         }
     )
-    _at_least("window_m", p.window_m, 0, strict=True)
-    _in_range("window_overlap", p.window_overlap, 0, 1, hi_open=True)
+    _at_least("window_m", p.window_m, 5)
+    _in_range("window_overlap", p.window_overlap, 0, 0.9)
     for name in ("confidence_threshold", "nms_threshold", "iou_threshold"):
         _in_range(name, getattr(p, name), 0, 1)
     _in_range("edge_band", p.edge_band, 0, 0.5, hi_open=True)
