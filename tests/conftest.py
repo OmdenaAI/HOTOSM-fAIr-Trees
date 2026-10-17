@@ -1,6 +1,7 @@
 """Shared fixtures. Chips carry real OAM names so name-derived georeferencing is exercised."""
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -78,3 +79,30 @@ def write_oam_chip(tmp_path):
         return path
 
     return _write
+
+
+class FakeSession:
+    """Stands in for onnxruntime.InferenceSession: background logits everywhere, optional planted logits."""
+
+    def __init__(self, planted=None):
+        self.planted = dict(planted or {})
+        self.calls = []
+
+    def get_inputs(self):
+        return [SimpleNamespace(name="images")]
+
+    def run(self, output_names, feeds):
+        from fair_trees.decode import make_anchors
+
+        batch = feeds["images"]
+        self.calls.append(tuple(batch.shape))
+        n = sum(len(a) for a in make_anchors(batch.shape[2], batch.shape[3]))
+        cls = np.full((1, n, 1), -10.0, np.float32)
+        for idx, logit in self.planted.items():
+            cls[0, idx, 0] = logit
+        return [cls, np.zeros((1, n, 4), np.float32)]
+
+
+@pytest.fixture
+def fake_session():
+    return FakeSession
