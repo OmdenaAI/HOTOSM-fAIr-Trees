@@ -5,9 +5,12 @@ for a single-class head, working in model-input pixels (no CRS).
 """
 
 import math
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 
 import numpy as np
+
+from fair_trees.preprocess import Window, WindowScale
 
 TOPK_CANDIDATES = 1000
 DETECTIONS_PER_IMG = 300
@@ -152,3 +155,60 @@ def decode_retinanet_output(
     boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, image_h)
     keep = nms_xyxy(boxes, scores, nms_threshold)[:DETECTIONS_PER_IMG]
     return Detections(boxes[keep].astype(np.float32), scores[keep].astype(np.float32))
+
+
+def window_to_mosaic(dets: Detections, window: Window, scale: WindowScale) -> Detections:
+    """Map model-input pixel boxes back to mosaic pixels."""
+    shift = np.array([window.x, window.y, window.x, window.y], np.float32)
+    div = np.array([scale.scale_x, scale.scale_y, scale.scale_x, scale.scale_y], np.float32)
+    return Detections((dets.boxes / div + shift).astype(np.float32), dets.scores)
+
+
+def interior_sides(
+    window: Window, active: Collection[tuple[int, int]], xs: Sequence[int], ys: Sequence[int]
+) -> set[str]:
+    """Sides of the window that border another non-blank window."""
+    i, j = xs.index(window.x), ys.index(window.y)
+    sides = set()
+    if i > 0 and (xs[i - 1], window.y) in active:
+        sides.add("left")
+    if i < len(xs) - 1 and (xs[i + 1], window.y) in active:
+        sides.add("right")
+    if j > 0 and (window.x, ys[j - 1]) in active:
+        sides.add("top")
+    if j < len(ys) - 1 and (window.x, ys[j + 1]) in active:
+        sides.add("bottom")
+    return sides
+
+
+def drop_edge_boxes(dets: Detections, window: Window, interior: set[str], band: float) -> Detections:
+    """Drop boxes reaching into the edge band of an interior window side."""
+    bx, by = band * window.width, band * window.height
+    x1, y1, x2, y2 = dets.boxes.T
+    drop = np.zeros(len(dets.scores), bool)
+    if "left" in interior:
+        drop |= x1 < window.x + bx
+    if "right" in interior:
+        drop |= x2 > window.x + window.width - bx
+    if "top" in interior:
+        drop |= y1 < window.y + by
+    if "bottom" in interior:
+        drop |= y2 > window.y + window.height - by
+    return Detections(dets.boxes[~drop], dets.scores[~drop])
+
+
+def merge_window_detections(dets: Detections, iou_threshold: float) -> Detections:
+    keep = nms_xyxy(dets.boxes, dets.scores, iou_threshold)
+    return Detections(dets.boxes[keep], dets.scores[keep])
+
+
+def filter_score(dets: Detections, threshold: float) -> Detections:
+    """Keep scores strictly greater than the threshold."""
+    keep = dets.scores > threshold
+    return Detections(dets.boxes[keep], dets.scores[keep])
+
+
+def concat_detections(parts: Sequence[Detections]) -> Detections:
+    if not parts:
+        return Detections.empty()
+    return Detections(np.concatenate([p.boxes for p in parts]), np.concatenate([p.scores for p in parts]))
