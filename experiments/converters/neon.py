@@ -154,11 +154,17 @@ def convert(
     val_ratio: float = 0.15,
     seed: int = 42,
     buffer_m: float = 1000.0,
+    eval_buffer_m: float = 1000.0,
     biome_fn: Callable[[float, float], str] | None = None,
     work_dir: Path | None = None,
 ) -> dict:
-    """Write one region per ``(scene, split)`` under ``out_root`` plus ``stats.json``; returns the stats."""
+    """Write a region per ``(scene, split)`` and ``stats.json`` into an empty ``out_root``; return the stats.
+
+    ``eval_buffer_m`` excludes chips near the eval plots; ``buffer_m`` is the train/val buffer of the split.
+    """
     raw_root, out_root = Path(raw_root), Path(out_root)
+    if out_root.exists() and any(out_root.iterdir()):
+        raise ValueError(f"{out_root}: output directory is not empty; old regions would mix with new ones")
     work_dir = Path(work_dir) if work_dir else out_root.parent / f"{out_root.name}-work"
     footprints = eval_plot_footprints(raw_root)
 
@@ -173,7 +179,7 @@ def convert(
         tiled = tile_scene(tif, work_dir / tif.stem, source_gsd=SOURCE_GSD, zooms=zooms)
         chips += [_Chip(tif.stem, parse_oam_name(p), p) for z in sorted(tiled) for p in tiled[z]]
 
-    near = near_footprints([c.xyz for c in chips], list(footprints.values()), buffer_m)
+    near = near_footprints([c.xyz for c in chips], list(footprints.values()), eval_buffer_m)
     kept = [c for c, is_near in zip(chips, near, strict=True) if not is_near]
 
     by_region: dict[tuple[str, str], list[_Chip]] = {}

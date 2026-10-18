@@ -87,6 +87,20 @@ def test_chips_near_eval_plots_are_excluded(raw, tmp_path):
     assert not list((tmp_path / "neon").glob("*/z*/chips/*.tif"))
 
 
+def test_eval_plot_overlapping_the_scene_is_excluded_without_a_split_buffer(raw, tmp_path):
+    _tif(raw / "evaluation" / "RGB" / "TEST_004.tif", 400050, 3285100, 200)  # inside the training scene
+    stats = convert(raw, tmp_path / "neon", block_size=1, val_ratio=0.3, buffer_m=0.0)
+    assert stats["excluded_near_eval_plots"] > 0
+    assert not list((tmp_path / "neon").glob("*/z*/chips/*.tif"))
+
+
+def test_convert_refuses_a_non_empty_out_root(raw, tmp_path):
+    out = tmp_path / "neon"
+    convert(raw, out, block_size=1, val_ratio=0.3)
+    with pytest.raises(ValueError, match="not empty"):
+        convert(raw, out, block_size=1, val_ratio=0.3, seed=7)
+
+
 def test_eval_plot_without_crs_is_an_error(raw):
     _tif(raw / "evaluation" / "RGB" / "TEST_003.tif", 0, 0, 100, crs=None)
     with pytest.raises(ValueError, match="CRS"):
