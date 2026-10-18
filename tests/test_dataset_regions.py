@@ -59,10 +59,18 @@ def test_multipolygon_split_into_parts(geo, origin):
     np.testing.assert_allclose(labels_to_boxes(fc, origin), [[0, 0, 10, 10], [50, 50, 70, 80]], atol=1e-6)
 
 
+def test_altitude_is_dropped(geo, origin):
+    poly = geo.box_polygon((10, 20, 60, 90))
+    with_alt = {"type": "Polygon", "coordinates": [[[*p, 123.0] for p in poly["coordinates"][0]]]}
+    flat, alt = (labels_to_boxes(geo.feature_collection([g], label=1), origin) for g in (poly, with_alt))
+    np.testing.assert_array_equal(alt, flat)
+
+
 @pytest.mark.parametrize(
     "geometry, reason",
     [
         (None, "empty"),
+        ({"type": "Polygon", "coordinates": [[[0], [1e-5], [2e-5], [1e-5], [0]]]}, "invalid"),
         ({"type": "Polygon", "coordinates": []}, "empty"),
         ({"type": "Polygon", "coordinates": [[[0, 0], [0, 0], [0, 0], [0, 0]]]}, "invalid"),
         ({"type": "Polygon", "coordinates": [[[0, 0], [1e-5, 0], [0, 0]]]}, "invalid"),

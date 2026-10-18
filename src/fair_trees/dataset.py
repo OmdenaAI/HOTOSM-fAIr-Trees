@@ -77,6 +77,20 @@ def _invalid_reason(ring: np.ndarray) -> str | None:
     return None
 
 
+def _exterior_ring(part: list) -> tuple[np.ndarray, str | None]:
+    """A polygon part's exterior ring as (k, 2) lon/lat with any altitude dropped, and why it is invalid."""
+    try:
+        ring = np.asarray(part[0] if part else [], np.float64)
+    except (TypeError, ValueError):
+        return np.empty((0, 2)), "malformed positions"
+    if ring.size == 0:
+        ring = ring.reshape(0, 2)
+    if ring.ndim != 2 or ring.shape[1] < 2:
+        return np.empty((0, 2)), "positions with fewer than 2 numbers"
+    ring = ring[:, :2]
+    return ring, _invalid_reason(ring)
+
+
 def label_rings(geojson: dict) -> list[np.ndarray]:
     """Exterior rings of the tree labels as (k, 2) float64 lon/lat arrays, one per polygon part.
 
@@ -100,8 +114,7 @@ def label_rings(geojson: dict) -> list[np.ndarray]:
             logger.warning(f"label feature {i}: unsupported geometry type {kind}, skipped")
             continue
         for part in parts:
-            ring = np.asarray(part[0] if part else [], np.float64).reshape(-1, 2)
-            why = _invalid_reason(ring)
+            ring, why = _exterior_ring(part)
             if why:
                 logger.warning(f"label feature {i}: invalid geometry ({why}), skipped")
                 continue
