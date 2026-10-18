@@ -9,7 +9,8 @@ CODE = "import sys, {mod}; print(sorted(m for m in ('torch', 'torchvision', 'sci
 
 
 @pytest.mark.parametrize(
-    "mod", ["fair_trees", "fair_trees.serve", "fair_trees.evaluate", "fair_trees.dataset"]
+    "mod",
+    ["fair_trees", "fair_trees.serve", "fair_trees.evaluate", "fair_trees.dataset", "fair_trees.augment"],
 )
 def test_serving_imports_stay_light(mod):
     out = subprocess.run(
