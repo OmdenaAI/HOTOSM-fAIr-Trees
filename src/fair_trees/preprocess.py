@@ -114,24 +114,33 @@ def read_chip(path: Path, *, use_sidecar: bool = True) -> tuple[np.ndarray, np.n
     return rgb, valid, xyz
 
 
-def _components(coords: Sequence[tuple[int, int]]) -> list[list[tuple[int, int]]]:
-    """Group (x, y) tiles into 8-connected components."""
-    remaining = set(coords)
+def tile_groups(xyzs: Sequence[tuple[int, int, int]]) -> list[list[int]]:
+    """Group ``(x, y, z)`` tiles into 8-connected components per zoom.
+
+    Returns index groups ordered by ``(z, min y, min x)``, indices ascending inside a group.
+    """
+    by_zoom: dict[int, dict[tuple[int, int], int]] = {}
+    for i, (x, y, z) in enumerate(xyzs):
+        by_zoom.setdefault(z, {}).setdefault((x, y), i)
     groups = []
-    while remaining:
-        stack = [remaining.pop()]
-        group = []
-        while stack:
-            x, y = stack.pop()
-            group.append((x, y))
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    neighbour = (x + dx, y + dy)
-                    if neighbour in remaining:
-                        remaining.remove(neighbour)
-                        stack.append(neighbour)
-        groups.append(group)
-    return groups
+    for z, index in by_zoom.items():
+        remaining = set(index)
+        while remaining:
+            stack = [remaining.pop()]
+            group = []
+            while stack:
+                x, y = stack.pop()
+                group.append((x, y))
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        neighbour = (x + dx, y + dy)
+                        if neighbour in remaining:
+                            remaining.remove(neighbour)
+                            stack.append(neighbour)
+            key = (z, min(y for _, y in group), min(x for x, _ in group))
+            groups.append((key, sorted(index[t] for t in group)))
+    groups.sort(key=lambda item: item[0])
+    return [indices for _, indices in groups]
 
 
 def _build_mosaic(tiles: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]], z: int) -> Mosaic:
@@ -178,13 +187,13 @@ def mosaic_chips(
             logger.warning("ignoring %s: duplicate of tile %d-%d-%d already read", path.name, x, y, z)
             continue
         tiles[(x, y)] = (rgb, valid)
-    groups = [
-        (z, min(y for _, y in group), min(x for x, _ in group), group)
-        for z, tiles in by_zoom.items()
-        for group in _components(list(tiles))
+    keys = [(x, y, z) for z, tiles in by_zoom.items() for x, y in tiles]
+    return [
+        _build_mosaic(
+            {(keys[i][0], keys[i][1]): by_zoom[keys[i][2]][keys[i][:2]] for i in group}, keys[group[0]][2]
+        )
+        for group in tile_groups(keys)
     ]
-    groups.sort(key=lambda item: item[:3])
-    return [_build_mosaic({k: by_zoom[z][k] for k in group}, z) for z, _, _, group in groups]
 
 
 def array_mosaic(rgb: np.ndarray, gsd_m: float, valid: np.ndarray | None = None) -> Mosaic:
