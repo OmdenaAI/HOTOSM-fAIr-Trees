@@ -134,10 +134,17 @@ def stage_shards(drive_root: Path, local_root: Path, sources: Sequence[str]) -> 
     for source in sources:
         src = drive_root / "shards" / source
         dst = local_root / source
+        manifest_bytes = (src / "manifest.json").read_bytes()
+        staged = dst / "manifest.json"
+        if staged.is_file() and staged.read_bytes() != manifest_bytes:
+            # the shards changed: start from an empty tree so no chip or region survives from the old one
+            logger.info("%s: shards changed on drive, removing the staged copy %s", source, dst)
+            shutil.rmtree(dst)
         dst.mkdir(parents=True, exist_ok=True)
-        manifest = json.loads((src / "manifest.json").read_text())
-        for name in ("manifest.json", "regions.jsonl"):
-            (dst / name).write_bytes((src / name).read_bytes())
+        manifest = json.loads(manifest_bytes)
         for entry in [manifest["vectors"], *manifest["shards"]]:
             _stage_tar(src / entry["name"], dst, local_root / ".incoming", entry["sha256"])
+        # written last, so a stage interrupted before this point does not look complete
+        (dst / "regions.jsonl").write_bytes((src / "regions.jsonl").read_bytes())
+        staged.write_bytes(manifest_bytes)
     return local_root

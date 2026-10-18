@@ -8,7 +8,7 @@ hyperparameters:
   patience: 3
   batch_size: 4
   samples_per_epoch: 400
-  ckpt_every_min: 10
+  ckpt_every_min: 0.5
   amp: true
   seed: 7
 val:

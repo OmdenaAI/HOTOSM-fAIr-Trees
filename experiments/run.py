@@ -109,18 +109,21 @@ def _write_json(path: Path, obj) -> None:
     path.write_text(json.dumps(obj, indent=2, allow_nan=False) + "\n")
 
 
-def _refuse_changed_run(config_path: Path, env: Mapping, parsed: Mapping, manifests: Mapping) -> None:
-    """Raise before anything is written when an existing run was made with other params or data."""
+def _run_changes(
+    config_path: Path, env: Mapping, conf: Mapping, parsed: Mapping, manifests: Mapping
+) -> list[str]:
+    """What differs from the existing run in ``config_path.parent``: config, parsed params or data."""
     changed = []
-    if config_path.exists() and json.loads(config_path.read_text())["parsed"] != parsed:
-        changed.append("the parsed hyperparameters")
+    if config_path.exists():
+        stored = json.loads(config_path.read_text())
+        # round-tripped through json like the stored copy
+        if stored["config"] != json.loads(json.dumps(conf)):
+            changed.append("the config")
+        if stored["parsed"] != parsed:
+            changed.append("the parsed hyperparameters")
     if "manifests" in env and env["manifests"] != manifests:
         changed.append("the data manifests")
-    if changed:
-        raise ValueError(
-            f"{config_path.parent}: {' and '.join(changed)} differ from the existing run; "
-            "pass force=True to start it over"
-        )
+    return changed
 
 
 def main(
@@ -135,8 +138,9 @@ def main(
 ) -> "TrainResult":
     """Train (or resume) run ``run_id`` from ``config``; writes ``config.json`` and ``env.json`` first.
 
-    An existing run whose parsed hyperparameters or data manifests differ is refused before any file is
-    written, unless ``force``.
+    An existing run whose config, parsed hyperparameters or data manifests differ is refused before any
+    file is written. With ``force`` it is started over instead: train moves the old checkpoints into
+    ``superseded-<n>/`` and the new run logs to a new MLflow run.
     """
     import torch
     import torchvision
@@ -153,8 +157,14 @@ def main(
     out_dir = Path(drive_root) / "runs" / run_id
     config_path, env_path = out_dir / "config.json", out_dir / "env.json"
     env = json.loads(env_path.read_text()) if env_path.exists() else {}
-    if not force:
-        _refuse_changed_run(config_path, env, parsed, manifests)
+    changed = _run_changes(config_path, env, conf, parsed, manifests)
+    if changed and not force:
+        raise ValueError(
+            f"{out_dir}: {' and '.join(changed)} differ from the existing run; "
+            "pass force=True to start it over"
+        )
+    if changed:
+        env = {k: v for k, v in env.items() if k != "mlflow_run_id"}
 
     out_dir.mkdir(parents=True, exist_ok=True)
     _write_json(config_path, {"config": conf, "parsed": parsed})
@@ -193,6 +203,7 @@ def main(
         tmp_dir=tmp_dir,
         repo_sha=sha,
         manifest_hash=_manifest_hash(conf, data_root),
+        resume=not changed,
         force=force,
     )
 

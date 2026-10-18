@@ -49,6 +49,18 @@ def test_stage_shards_verifies_extracts_and_skips(source_root, tmp_path, monkeyp
     stage_shards(drive, tmp_path / "data", ["neon"])
 
 
+def test_restaging_changed_shards_leaves_no_stale_region(source_root, tmp_path):
+    drive = tmp_path / "drive"
+    write_shards(source_root, drive / "shards" / "neon", source="neon", converter_sha="abc")
+    local = stage_shards(drive, tmp_path / "data", ["neon"])
+    shutil.rmtree(source_root / "b")
+    shutil.rmtree(drive / "shards" / "neon")
+    write_shards(source_root, drive / "shards" / "neon", source="neon", converter_sha="abc")
+    stage_shards(drive, tmp_path / "data", ["neon"])
+    assert [r.id for r in load_regions(local / "neon")] == ["a"]
+    assert not (local / "neon" / "b").exists()
+
+
 def test_stage_shards_rejects_a_corrupt_shard(source_root, tmp_path):
     drive = tmp_path / "drive"
     m = write_shards(source_root, drive / "shards" / "neon", source="neon", converter_sha="abc")
@@ -56,3 +68,5 @@ def test_stage_shards_rejects_a_corrupt_shard(source_root, tmp_path):
         f.write(b"garbage")
     with pytest.raises(ValueError, match="sha256"):
         stage_shards(drive, tmp_path / "data", ["neon"])
+    # the manifest is written last, so an interrupted stage does not look complete
+    assert not (tmp_path / "data" / "neon" / "manifest.json").exists()

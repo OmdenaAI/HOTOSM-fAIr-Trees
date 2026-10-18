@@ -108,33 +108,60 @@ def test_main_writes_run_files_and_calls_train(monkeypatch, setup, tmp_path):
     assert json.loads((drive / "runs" / "r2" / "config.json").read_text())["parsed"]["learning_rate"] == 0.002
 
 
-def _refused_then_forced(config, run_id, kw, match):
-    """Rerun `run_id` after a change: refused with no file touched, then accepted with force=True."""
+def _rerun(monkeypatch, config, run_id, kw, **main_kw):
+    """Run `main` again and return the keyword arguments it passed to train."""
+    calls = {}
+    monkeypatch.setattr("fair_trees.train.train", lambda *a, **k: calls.update(k))
+    run.main(config, run_id, **kw, **main_kw)
+    return calls
+
+
+def _set_mlflow_run_id(out, value):
+    env = json.loads((out / "env.json").read_text())
+    (out / "env.json").write_text(json.dumps({**env, "mlflow_run_id": value}))
+
+
+def _refused_then_forced(monkeypatch, config, run_id, kw, match):
+    """Rerun `run_id` after a change: refused with no file touched, then started over with force=True."""
     out = kw["drive_root"] / "runs" / run_id
+    _set_mlflow_run_id(out, "old")
     before = {name: (out / name).read_bytes() for name in ("config.json", "env.json")}
     with pytest.raises(ValueError, match=f"{match}.*force=True"):
         run.main(config, run_id, **kw)
     assert {name: (out / name).read_bytes() for name in before} == before
-    run.main(config, run_id, force=True, **kw)
-    return json.loads((out / "config.json").read_text()), json.loads((out / "env.json").read_text())
+    calls = _rerun(monkeypatch, config, run_id, kw, force=True)
+    assert calls["resume"] is False and calls["force"] is True
+    env = json.loads((out / "env.json").read_text())
+    assert env["mlflow_run_id"] is None  # the new run logs to a new mlflow run
+    return json.loads((out / "config.json").read_text()), env
 
 
-def test_main_refuses_changed_hyperparameters_unless_forced(setup, tmp_path):
+def test_main_refuses_changed_hyperparameters_unless_forced(monkeypatch, setup, tmp_path):
     data, drive, config, _ = setup
     kw = dict(drive_root=drive, data_root=data, tmp_dir=tmp_path / "tmp")
-    run.main(config, "r1", **kw)  # an unchanged rerun resumes
+    _set_mlflow_run_id(drive / "runs" / "r1", "old")
+    assert _rerun(monkeypatch, config, "r1", kw)["resume"] is True  # an unchanged rerun resumes
+    assert json.loads((drive / "runs" / "r1" / "env.json").read_text())["mlflow_run_id"] == "old"
     config.write_text(CONFIG.replace("lr: 0.002", "lr: 0.003"))
-    conf, _ = _refused_then_forced(config, "r1", kw, "hyperparameters")
+    conf, _ = _refused_then_forced(monkeypatch, config, "r1", kw, "hyperparameters")
     assert conf["parsed"]["learning_rate"] == 0.003
 
 
-def test_main_refuses_changed_manifests_unless_forced(setup, tmp_path):
+def test_main_refuses_changed_manifests_unless_forced(monkeypatch, setup, tmp_path):
     data, drive, config, _ = setup
     kw = dict(drive_root=drive, data_root=data, tmp_dir=tmp_path / "tmp")
     old = json.loads((drive / "runs" / "r1" / "env.json").read_text())["manifests"]
     (data / "neon" / "manifest.json").write_text('{"source": "neon", "restaged": true}\n')
-    _, env = _refused_then_forced(config, "r1", kw, "manifests")
+    _, env = _refused_then_forced(monkeypatch, config, "r1", kw, "manifests")
     assert env["manifests"] != old
+
+
+def test_main_refuses_changed_weights_unless_forced(monkeypatch, setup, tmp_path):
+    data, drive, config, _ = setup
+    kw = dict(drive_root=drive, data_root=data, tmp_dir=tmp_path / "tmp")
+    config.write_text(CONFIG.replace("weights/NEON.pt", "weights/other.pt"))
+    conf, _ = _refused_then_forced(monkeypatch, config, "r1", kw, "config")
+    assert conf["config"]["weights"] == "weights/other.pt"
 
 
 def test_evaluate_writes_parts(monkeypatch, setup, fake_session):
