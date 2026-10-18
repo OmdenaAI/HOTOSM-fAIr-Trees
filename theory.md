@@ -75,3 +75,13 @@ Tags: [V] verified (source code, checkpoint, dataset card, paper, or arithmetic 
 - Masked and nodata pixels are set to 0 after colour jitter, so they match partial-nodata windows at serving [P].
 - Downscale range (0.5, 1.0) with p 0.5, and hue jitter in degrees, are placeholders pending DeepForest's
   Downscale config and the unit (degrees or a 0-255 hue channel) of the planned +/-10 hue jitter [?].
+
+## 10. Data conversion
+- Chips are cut from each scene per zoom only when the zoom's true GSD at the scene centre is at least the
+  source GSD, so nothing is upsampled. 10 cm sources give no z21 anywhere and no z20 above ~47.9 degrees
+  (0.149 * cos(lat) < 0.10) [V: arithmetic].
+- Chips are 256 px JPEG GeoTIFFs in EPSG:3857 aligned to the XYZ grid, named OAM-x-y-z.tif. JPEG cannot
+  hold exact zeros, so nodata travels in an internal GDAL mask that read_chip honours [P].
+- Chips more than 80% nodata are dropped [P].
+- NEON: block split per site keyed at z19 with a 1 km buffer, and every chip within 1 km of a
+  NeonTreeEvaluation eval plot is excluded before splitting [P].
