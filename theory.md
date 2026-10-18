@@ -31,7 +31,10 @@ Tags: [V] verified (source code, checkpoint, dataset card, paper, or arithmetic 
 - Forgetting tolerance = release model's 95% CI on the NEON eval plots (recorded after the NEON reproduction run) [P].
 
 ## 6. Weights and data provenance
-(URLs and sha256 of the weights and evaluation data, added as each is downloaded.)
+- `NEON.pt`: https://huggingface.co/weecology/deepforest-tree/resolve/main/NEON.pt, sha256 `6d2194194daa694ce99c3daff8d53a95722d5856337466263e9a1bd23f8d282a`, retrieved 2026-10-18 [V].
+- `OSBS_029.tif`: https://raw.githubusercontent.com/weecology/DeepForest/main/src/deepforest/data/OSBS_029.tif, sha256 `8521dbb5e8063d37d61895867dfcca7476491d1345103dc1b3fd96f71b186353`, retrieved 2026-10-18 [V].
+- The strict-load check (301 keys, frozen-BN layout) and the torchvision parity checks (anchors, preprocessing, decode plus NMS against `postprocess_detections`) in `tests/integration/test_parity.py` pass with torch 2.11.0 / torchvision 0.26.0 on 2026-10-18 [V].
+- `FrozenBatchNorm2d` silently drops `num_batches_tracked` on load, so `load_state_dict(strict=True)` accepts a 354-key trainable-BN checkpoint; `build_model` rejects checkpoints containing `num_batches_tracked` explicitly [V]. `NEON.pt` stores the FPN blocks under the older key names (`inner_blocks.N.weight`), which torchvision remaps on load [V].
 - Real-sidecar check: a real fAIr chip's `.aux.xml` bounds against the bounds derived from its OAM file name is pending a real fAIr chip [?].
 
 ## 7. Environment

@@ -17,4 +17,9 @@ uv run pytest -q                 # offline, CPU, no network
 uv run pytest -m integration     # opt-in parity; needs weights/NEON.pt and tests/data_local/OSBS_029.tif
 ```
 
+## Integration tests
+
+The opt-in parity tests need two local downloads (`weights/NEON.pt` and `tests/data_local/OSBS_029.tif`).
+`experiments/DATA_SOURCES.md` lists the URLs, sha256 values and the download commands.
+
 See theory.md for the model facts and CLAUDE.md for the repository rules.
