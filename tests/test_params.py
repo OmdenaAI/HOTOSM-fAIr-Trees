@@ -74,6 +74,8 @@ def test_bools_rejected_for_numbers(key):
         {"window_m": "abc"},
         {"window_m": 4.9},
         {"window_overlap": 0.95},
+        {"window_m": 201},
+        {"window_m": 10**400},
     ],
 )
 def test_inference_ranges(hp):

@@ -100,9 +100,12 @@ def read_chip(path: Path, *, use_sidecar: bool = True) -> tuple[np.ndarray, np.n
         if ds.count == 4:
             valid &= data[3] > 0  # band 4 is alpha whatever its colour interpretation
         width = ds.width
+        height = ds.height
+    if height != width:
+        raise ValueError(f"{path.name}: chip is not square ({width}x{height})")
     rgb = np.ascontiguousarray(data[:3].transpose(1, 2, 0))
     rgb[~valid] = 0
-    if use_sidecar and Path(f"{path}.aux.xml").exists():
+    if use_sidecar and Path(f"{path}.aux.xml").is_file():
         found = read_sidecar_bounds(path)
         expected = tile_bounds_4326(*xyz)
         tolerance = (expected[2] - expected[0]) / width / 2
@@ -152,8 +155,13 @@ def _build_mosaic(tiles: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]], z
     return Mosaic(rgb, valid, Affine(res, 0, minx, 0, -res, maxy), z, gsd)
 
 
-def mosaic_chips(paths: Sequence[Path], *, use_sidecar: bool = True) -> list[Mosaic]:
-    """Stitch chips into one mosaic per (zoom, 8-connected tile component), sorted by (z, y, x)."""
+def mosaic_chips(
+    paths: Sequence[Path], *, use_sidecar: bool = True, skipped: list[tuple[str, str]] | None = None
+) -> list[Mosaic]:
+    """Stitch chips into one mosaic per (zoom, 8-connected tile component), sorted by (z, y, x).
+
+    Unreadable chips are skipped with a warning; when `skipped` is given, `(name, reason)` is appended.
+    """
     by_zoom: dict[int, dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]] = {}
     for path in map(Path, paths):
         if path.suffix.lower() not in CHIP_SUFFIXES:
@@ -162,6 +170,8 @@ def mosaic_chips(paths: Sequence[Path], *, use_sidecar: bool = True) -> list[Mos
             rgb, valid, (x, y, z) = read_chip(path, use_sidecar=use_sidecar)
         except (ValueError, RasterioIOError) as exc:
             logger.warning("skipping %s: %s", path.name, exc)
+            if skipped is not None:
+                skipped.append((path.name, str(exc)))
             continue
         tiles = by_zoom.setdefault(z, {})
         if (x, y) in tiles:

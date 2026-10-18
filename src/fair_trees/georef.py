@@ -71,6 +71,8 @@ def read_sidecar_bounds(chip_path: Path) -> tuple[float, float, float, float]:
     if gt_text is None:
         raise ValueError(f"no GeoTransform in {sidecar}")
     gt = [float(v) for v in gt_text.split(",")]
+    if not all(math.isfinite(v) for v in gt):
+        raise ValueError(f"non-finite GeoTransform in {sidecar}: {gt}")
     if len(gt) != 6:
         raise ValueError(f"GeoTransform in {sidecar} has {len(gt)} values, expected 6")
     if gt[2] != 0 or gt[4] != 0:

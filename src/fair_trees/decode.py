@@ -153,6 +153,8 @@ def decode_retinanet_output(
     image_h, image_w = image_hw
     boxes[:, [0, 2]] = np.clip(boxes[:, [0, 2]], 0, image_w)
     boxes[:, [1, 3]] = np.clip(boxes[:, [1, 3]], 0, image_h)
+    finite = np.isfinite(boxes).all(axis=1)
+    boxes, scores = boxes[finite], scores[finite]
     keep = nms_xyxy(boxes, scores, nms_threshold)[:DETECTIONS_PER_IMG]
     return Detections(boxes[keep].astype(np.float32), scores[keep].astype(np.float32))
 

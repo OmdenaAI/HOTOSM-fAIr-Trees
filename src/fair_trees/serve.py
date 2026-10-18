@@ -22,6 +22,8 @@ from fair_trees.preprocess import Mosaic, is_blank, mosaic_chips, preprocess_win
 
 logger = logging.getLogger(__name__)
 
+MAX_WINDOW_FACTOR = 16  # a request may cost at most this many times the default window count
+
 RunFn = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]
 
 
@@ -62,6 +64,12 @@ def predict_mosaic(run_fn: RunFn, mosaic: Mosaic, params: InferenceParams) -> De
     return merge_window_detections(concat_detections(parts), params.iou_threshold)
 
 
+def _window_count(mosaics: list[Mosaic], params: InferenceParams) -> int:
+    return sum(
+        len(window_grid(*m.rgb.shape[:2], m.gsd_m, params.window_m, params.window_overlap)) for m in mosaics
+    )
+
+
 def predict_session(
     session,
     input_images: Path,
@@ -72,7 +80,17 @@ def predict_session(
     p = parse_inference_params(params)
     input_images = Path(input_images)
     paths = [input_images] if input_images.is_file() else sorted(input_images.iterdir())
-    mosaics = mosaic_chips(paths)
+    skipped: list[tuple[str, str]] = []
+    mosaics = mosaic_chips(paths, skipped=skipped)
+    if not mosaics and skipped:
+        reasons = "; ".join(f"{name}: {why}" for name, why in skipped[:3])
+        raise ValueError(f"no usable chips ({len(skipped)} skipped): {reasons}")
+    requested, baseline = _window_count(mosaics, p), _window_count(mosaics, InferenceParams())
+    if requested > MAX_WINDOW_FACTOR * baseline:
+        raise ValueError(
+            f"window_m={p.window_m:g} and window_overlap={p.window_overlap:g} need {requested} windows, "
+            f"more than {MAX_WINDOW_FACTOR}x the {baseline} of the default settings"
+        )
     if len({m.z for m in mosaics}) > 1:
         logger.warning(
             "Chips span several zoom levels %s; each tile group is predicted separately",

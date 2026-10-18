@@ -90,3 +90,30 @@ def test_bbox_and_params_are_applied(write_oam_chip, fake_session, tmp_path):
 def test_single_file_input(write_oam_chip, fake_session):
     path = write_oam_chip()
     assert len(predict_session(fake_session({CENTRE_ANCHOR_800: 5.0}), path, None)["features"]) == 1
+
+
+def test_request_exceeding_window_budget_is_rejected(write_oam_chip, fake_session, tmp_path):
+    write_oam_chip()
+    s = fake_session()
+    with pytest.raises(ValueError, match=r"windows.*\d+.*\d+"):
+        predict_session(s, tmp_path, {"window_m": 5, "window_overlap": 0.9})
+    assert s.calls == []
+    predict_session(s, tmp_path, {})
+    assert len(s.calls) == 1
+
+
+def test_only_bad_chips_raise_with_reason(write_oam_chip, fake_session, tmp_path):
+    write_oam_chip(count=1)
+    with pytest.raises(ValueError, match="3 bands"):
+        predict_session(fake_session(), tmp_path, None)
+
+
+def test_only_misnamed_chip_raises(write_oam_chip, fake_session, tmp_path):
+    write_oam_chip(name="photo.tif")
+    with pytest.raises(ValueError, match="photo.tif"):
+        predict_session(fake_session(), tmp_path, None)
+
+
+def test_directory_without_images_is_empty(fake_session, tmp_path):
+    (tmp_path / "notes.txt").write_text("x")
+    assert predict_session(fake_session(), tmp_path, None) == EMPTY

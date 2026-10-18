@@ -16,6 +16,8 @@ SIZE_DIVISIBLE = 32
 IMAGE_MEAN = (0.485, 0.456, 0.406)
 IMAGE_STD = (0.229, 0.224, 0.225)
 
+MAX_WINDOW_M = 200.0
+
 INPUT_NAME = "images"
 OUTPUT_NAMES = ("cls_logits", "bbox_regression")
 
@@ -110,11 +112,14 @@ def _number(name: str, value: Any, kind: type) -> int | float:
         raise ValueError(f"{name} must be a number, got {type(value).__name__}")
     if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{name} must be finite, got {value!r}")
-    if kind is int:
-        if value != int(value):
-            raise ValueError(f"{name} must be an integer, got {value!r}")
-        return int(value)
-    return float(value)
+    try:
+        if kind is int:
+            if value != int(value):
+                raise ValueError(f"{name} must be an integer, got {value!r}")
+            return int(value)
+        return float(value)
+    except OverflowError:
+        raise ValueError(f"{name} is too large, got {value!r}") from None
 
 
 def _field(mapping: Mapping, name: str, default: Any, kind: type, aliases: Sequence[str] = ()) -> Any:
@@ -176,7 +181,7 @@ def parse_inference_params(params: Mapping | None) -> InferenceParams:
             for name in InferenceParams.__dataclass_fields__
         }
     )
-    _at_least("window_m", p.window_m, 5)
+    _in_range("window_m", p.window_m, 5, MAX_WINDOW_M)
     _in_range("window_overlap", p.window_overlap, 0, 0.9)
     for name in ("confidence_threshold", "nms_threshold", "iou_threshold"):
         _in_range(name, getattr(p, name), 0, 1)

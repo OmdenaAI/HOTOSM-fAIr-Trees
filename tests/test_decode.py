@@ -122,3 +122,11 @@ def test_nms_ties_and_strict_threshold():
     assert nms_xyxy(b, s, 0.5).tolist() == [0, 1]
     assert nms_xyxy(b, s, 0.49).tolist() == [0]
     assert nms_xyxy(np.zeros((0, 4), np.float32), np.zeros(0, np.float32), 0.5).tolist() == []
+
+
+def test_nan_regression_row_is_dropped():
+    good, bad = CENTRE_ANCHOR_800, CENTRE_ANCHOR_800 + 9 * 100 * 10 * 3
+    cls, box = _outputs((800, 800), {good: 5.0, bad: 5.0}, {bad: [np.nan, 0.0, 0.0, 0.0]})
+    d = decode_retinanet_output(cls, box, (800, 800), (800, 800), 0.1, 0.05)
+    assert np.isfinite(d.boxes).all()
+    np.testing.assert_allclose(d.boxes, [[384, 384, 416, 416]], atol=1e-4)

@@ -91,3 +91,11 @@ def test_rings_closed_ccw_and_georeferenced():
 def test_rings_empty():
     mosaic = SimpleNamespace(transform_3857=Affine.identity())
     assert mosaic_px_to_4326_rings(np.zeros((0, 4), np.float32), mosaic) == []
+
+
+def test_sidecar_with_non_finite_geotransform_raises(write_oam_chip, write_sidecar):
+    path = write_oam_chip()
+    w, s, e, n = tile_bounds_4326(X0, Y0, 20)
+    write_sidecar(path, (float("nan"), s, e, n), 256, 256)
+    with pytest.raises(ValueError, match="sidecar"):
+        read_sidecar_bounds(path)

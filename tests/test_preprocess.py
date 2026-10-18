@@ -4,6 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from affine import Affine
 
 from fair_trees.georef import tile_bounds_3857, tile_bounds_4326, true_gsd
 from fair_trees.preprocess import (
@@ -172,3 +173,32 @@ def test_malformed_sidecar_is_a_value_error_and_skipped(write_oam_chip, tmp_path
     with caplog.at_level(logging.WARNING, logger="fair_trees.preprocess"):
         assert mosaic_chips([path]) == []
     assert path.name in caplog.text
+
+
+def test_non_square_chip_is_skipped_not_fatal(write_oam_chip, tmp_path, caplog):
+    import rasterio
+
+    good = write_oam_chip()
+    odd = write_oam_chip(X0 + 1, Y0)
+    with rasterio.open(odd) as src:
+        data = src.read()[:, :, :255]
+    profile = {"driver": "GTiff", "height": 256, "width": 255, "count": 3, "dtype": "uint8"}
+    with rasterio.open(odd, "w", crs="EPSG:3857", transform=Affine(2, 0, 100, 0, -2, 100), **profile) as dst:
+        dst.write(data)
+    with caplog.at_level(logging.WARNING, logger="fair_trees.preprocess"):
+        ms = mosaic_chips([good, odd])
+    assert len(ms) == 1 and ms[0].rgb.shape == (256, 256, 3)
+    assert odd.name in caplog.text
+
+
+def test_sidecar_directory_is_not_a_sidecar(write_oam_chip):
+    path = write_oam_chip()
+    Path(f"{path}.aux.xml").mkdir()
+    read_chip(path)
+
+
+def test_mosaic_chips_collects_skip_reasons(write_oam_chip):
+    skipped = []
+    assert mosaic_chips([write_oam_chip(count=1)], skipped=skipped) == []
+    assert [name for name, _ in skipped] == ["OAM-524288-524288-20.tif"]
+    assert "3 bands" in skipped[0][1]
