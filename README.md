@@ -17,6 +17,28 @@ uv run pytest -q                 # offline, CPU, no network
 uv run pytest -m integration     # opt-in parity; needs weights/NEON.pt and tests/data_local/OSBS_029.tif
 ```
 
+## Fine-tuning (what the fAIr pack calls)
+
+```python
+from pathlib import Path
+from fair_trees.dataset import spatial_split
+from fair_trees.train import fine_tune
+
+chips = sorted(Path("chips").glob("OAM-*.tif"))
+train_chips, val_chips = spatial_split(chips, val_ratio=0.2, seed=42)
+result = fine_tune(
+    train_chips,
+    val_chips,
+    Path("labels.geojson"),
+    {"epochs": 10},
+    weights=Path("base.pt"),
+    out_dir=Path("run"),
+)
+print(result.best_checkpoint, result.best_metrics)
+```
+
+Calling `fine_tune` again on the same `out_dir` resumes an interrupted run, or returns the finished result.
+
 ## Integration tests
 
 The opt-in parity tests need two local downloads (`weights/NEON.pt` and `tests/data_local/OSBS_029.tif`).

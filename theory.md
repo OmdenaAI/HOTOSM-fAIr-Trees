@@ -46,3 +46,32 @@ Tags: [V] verified (source code, checkpoint, dataset card, paper, or arithmetic 
   2.11.0+cu130 0.26.0+cu130
   ```
 - Pinned in `pyproject.toml` as `torch==2.11.0` and `torchvision==0.26.0` (CPU wheels locally and in CI) [V].
+
+## 8. Training
+- One `train()` serves both regimes: base training (trainable_layers 3, mixed sources) and the platform
+  fine-tune (trainable_layers 0, the mapper's chips) [P].
+- The forward pass calls backbone, head, anchor generator and `compute_loss` directly on batches from
+  `preprocess_window`; `GeneralizedRCNNTransform` never runs. The opt-in loss-parity test checks this path
+  against `model(images, targets)` on NEON.pt [V: tests/integration/test_train_parity.py].
+- Loss = classification + bbox_regression + alpha * sum ||w - w0||^2 over trainable parameters, with w0
+  snapshotted after loading the start weights. The constant is alpha, not alpha/2 as in Li et al. (2018).
+  When alpha > 0, weight decay is forced to 0 [P].
+- Boxes narrower or shorter than 1 px after resizing are dropped, because log(w) in the box coder would be
+  infinite [V: torchvision BoxCoder].
+- AMP: fp16 with GradScaler on T4/L4, bf16 on A100/H100, none on CPU [P].
+- Early stopping on val f1_max (biased: its threshold is chosen on val) with AP@0.4 breaking ties within
+  min_delta; f1_max is never reported as a result [P].
+- Checkpoints: saved locally, copied to `<name>.part`, size-checked, renamed; the oldest beyond keep_last is
+  deleted only after that. A resume regenerates the epoch plan from (seed, epoch) and continues at the saved
+  step; no RNG state is stored. The history carries a sha256 of the plan and of the sample indices actually
+  trained, so an interrupted run can be checked against an uninterrupted one [P].
+
+## 9. Sampling and crops
+- Source, then biome, then region, then zoom; source and biome probabilities follow n^alpha of valid area
+  (alpha 0 equal, 1 proportional) [P].
+- Crops of 30-80 m at native GSD, clipped to small regions; a draw is rejected if it touches an absent tile
+  or is more than 80% masked on a low-resolution mask, with a whole-tile fallback after 20 tries [P].
+- A box is kept if at least 40% of its area is inside the crop and unmasked (pixel-centre count) [P].
+- Masked and nodata pixels are set to 0 after colour jitter, so they match partial-nodata windows at serving [P].
+- Downscale range (0.5, 1.0) with p 0.5, and hue jitter in degrees, are placeholders pending DeepForest's
+  Downscale config and the unit of PLAN's "hue +/-10" [?].

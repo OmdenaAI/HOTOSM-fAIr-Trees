@@ -1,13 +1,17 @@
-"""Torch side: RetinaNet builder, numpy-facing run function, and the training-step pieces."""
+"""Torch side: RetinaNet builder, numpy-facing run function, the training loop and `fine_tune`."""
 
+import csv
 import dataclasses
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import shutil
-from collections.abc import Mapping, Sequence
+import tempfile
+import time
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -22,8 +26,18 @@ from torchvision.models.detection.image_list import ImageList
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7
 from torchvision.ops.misc import FrozenBatchNorm2d
 
-from fair_trees.dataset import Region, RegionCache, SampleSpec, load_sample
-from fair_trees.params import TrainParams
+from fair_trees.dataset import (
+    Region,
+    RegionCache,
+    SampleSpec,
+    load_fair_dataset,
+    load_sample,
+    plan_epoch,
+    sampler_stats,
+    total_chips,
+)
+from fair_trees.evaluate import EvalUnit, evaluate_units, region_units
+from fair_trees.params import InferenceParams, TrainParams, parse_train_params
 from fair_trees.preprocess import preprocess_window
 from fair_trees.serve import RunFn
 
@@ -255,3 +269,292 @@ def check_resume(
             raise ValueError("manifest hash changed: the training data differ")
     if state["repo_sha"] != repo_sha:
         logger.warning(f"repo SHA changed since the checkpoint: {state['repo_sha']} -> {repo_sha}")
+
+
+@dataclasses.dataclass
+class TrainResult:
+    best_checkpoint: Path
+    last_checkpoint: Path
+    best_metrics: dict
+    history: list[dict]
+
+
+def _fresh_sums() -> dict:
+    return {"cls": 0.0, "reg": 0.0, "l2sp": 0.0, "batches": 0}
+
+
+@dataclasses.dataclass
+class _LoopState:
+    """Everything a resume restores besides the torch state dicts; `epoch` and `step` are the next to run.
+
+    Only ints, floats, strings, bools, lists and dicts, so the checkpoint loads with `weights_only=True`.
+    """
+
+    epoch: int = 0
+    step: int = 0
+    best_f1: float = -math.inf
+    best_ap: float = -math.inf
+    patience_left: int = 0
+    epoch_seen: list[int] = dataclasses.field(default_factory=list)
+    sums: dict = dataclasses.field(default_factory=_fresh_sums)
+    history: list[dict] = dataclasses.field(default_factory=list)
+    best_metrics: dict = dataclasses.field(default_factory=dict)
+    done: bool = False
+
+
+def amp_dtype(device: torch.device, amp: bool) -> torch.dtype | None:
+    """None without AMP or off CUDA; bf16 on A100/H100, fp16 elsewhere (T4, L4)."""
+    if not amp or device.type != "cuda":
+        return None
+    name = torch.cuda.get_device_name(device)
+    return torch.bfloat16 if "A100" in name or "H100" in name else torch.float16
+
+
+def _validate(
+    model: RetinaNet, device: torch.device, units: Sequence[EvalUnit], params: InferenceParams, epoch: int
+) -> dict:
+    """Val metrics through the serving decode path; puts the model back in train mode."""
+    t0 = time.monotonic()
+    report = evaluate_units(torch_run_fn(model, device), units, params)
+    model.train()
+    return {
+        "f1_max": report.f1_max,
+        "conf_at_max": report.conf_at_max,
+        "ap40": report.ap40,
+        "aoi_f1": report.aoi_f1,
+        "seconds": time.monotonic() - t0,
+    }
+
+
+def _plan_sha256(specs: Sequence[SampleSpec]) -> str:
+    lines = (
+        f"{s.region_id}|{s.zoom}|{s.centre_px[0]:.6f}|{s.centre_px[1]:.6f}|{s.size_m:.6f}|{s.aug_seed}"
+        for s in specs
+    )
+    return hashlib.sha256("\n".join(lines).encode()).hexdigest()
+
+
+def _write_metrics_csv(path: Path, history: Sequence[Mapping]) -> None:
+    keys = sorted({k for row in history for k in row} - {"epoch", "improved"})
+    with path.open("w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=["epoch", "improved", *keys], restval="")
+        writer.writeheader()
+        writer.writerows(history)
+
+
+def train(
+    cfg: TrainParams,
+    train_regions: Sequence[Region],
+    val_regions: Sequence[Region],
+    *,
+    weights: Path,
+    out_dir: Path,
+    on_epoch_end: Callable[[dict, int], None] | None = None,
+    resume: bool = True,
+    force: bool = False,
+    val_zooms: Sequence[int] = (20, 19),
+    num_workers: int = 2,
+    device: str | None = None,
+    tmp_dir: Path | None = None,
+    repo_sha: str = "",
+    manifest_hash: str = "",
+) -> TrainResult:
+    """Train from `weights` with early stopping on val f1_max; resumes from the newest checkpoint.
+
+    The epoch plan is regenerated from (seed, epoch) on resume, so an interrupted run trains on the same
+    samples as an uninterrupted one. A finished run returns its result without training.
+    """
+    if not train_regions:
+        raise ValueError("no train regions")
+    out_dir = Path(out_dir)
+    device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+    model = build_model(weights, trainable_layers=cfg.trainable_layers).to(device).train()
+    ref = snapshot(model)
+    w0 = state_hash(ref)
+    chash = config_hash(cfg)
+    opt = torch.optim.SGD(
+        [p for p in model.parameters() if p.requires_grad],
+        lr=cfg.learning_rate,
+        momentum=cfg.momentum,
+        weight_decay=cfg.weight_decay,
+    )
+    n = cfg.samples_per_epoch or total_chips(train_regions)
+    steps = math.ceil(n / cfg.batch_size)
+    total = cfg.epochs * steps
+
+    def lr_factor(t: int) -> float:
+        if cfg.schedule == "cosine":
+            return 0.5 * (1 + math.cos(math.pi * min(t, total) / total))
+        return 1.0
+
+    sched = torch.optim.lr_scheduler.LambdaLR(opt, lr_factor)
+    dtype = amp_dtype(device, cfg.amp)
+    scaler = torch.amp.GradScaler(device.type, enabled=dtype is torch.float16)
+    tmp_dir = Path(tmp_dir) if tmp_dir else Path(tempfile.gettempdir()) / "fair_trees_ckpt"
+
+    s = _LoopState(patience_left=cfg.patience)
+    last_path = None
+    found = latest_checkpoint(out_dir) if resume else None
+    if found is not None:
+        last_path, state = found
+        check_resume(
+            state, config_hash=chash, w0_hash=w0, manifest_hash=manifest_hash, repo_sha=repo_sha, force=force
+        )
+        s = _LoopState(**{f.name: state[f.name] for f in dataclasses.fields(_LoopState)})
+        if s.done:
+            return TrainResult(out_dir / "best.pt", last_path, s.best_metrics, s.history)
+        model.load_state_dict(state["model"])
+        opt.load_state_dict(state["optimizer"])
+        sched.load_state_dict(state["scheduler"])
+        scaler.load_state_dict(state["scaler"])
+        logger.info(f"resuming from {last_path.name}: epoch {s.epoch}, step {s.step}")
+    elif not resume and _checkpoints(out_dir) and not force:
+        raise ValueError("out_dir already holds checkpoints: use resume=True or a new out_dir")
+
+    # after the resume check, so a finished run returns without reading the val set
+    val_units = region_units(val_regions, zooms=val_zooms) if val_regions else []
+    if not val_regions:
+        logger.warning("no val regions: every epoch counts as an improvement and best.pt is the last epoch")
+
+    def save_state(name: str) -> Path:
+        state = {
+            "model": model.state_dict(),
+            "optimizer": opt.state_dict(),
+            "scheduler": sched.state_dict(),
+            "scaler": scaler.state_dict(),
+            **dataclasses.asdict(s),
+            "w0_hash": w0,
+            "config_hash": chash,
+            "manifest_hash": manifest_hash,
+            "repo_sha": repo_sha,
+        }
+        return save_file(state, out_dir, name, tmp_dir=tmp_dir, keep_last=cfg.keep_last)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    cache = RegionCache(train_regions)
+    last_save = time.monotonic()
+    for epoch in range(s.epoch, cfg.epochs):
+        s.epoch = epoch
+        specs = plan_epoch(train_regions, cfg, cfg.seed, epoch, cache=cache)
+        stats = sampler_stats(specs, cache)
+        t_epoch = time.monotonic()
+        trained = 0  # samples trained in this session; a resumed epoch counts only its remainder
+        loader = make_loader(
+            specs, train_regions, cfg, start=s.step * cfg.batch_size, num_workers=num_workers
+        )
+        for batch in loader:
+            images = batch.images.to(device)
+            targets = [{k: v.to(device) for k, v in t.items()} for t in batch.targets]
+            with torch.autocast(device.type, dtype=dtype, enabled=dtype is not None):
+                losses = forward_loss(model, images, batch.image_sizes, targets)
+            l2 = l2sp_penalty(model, ref) if cfg.l2sp_alpha > 0 else torch.zeros((), device=device)
+            loss = losses["classification"].float() + losses["bbox_regression"].float() + cfg.l2sp_alpha * l2
+            if not torch.isfinite(loss):
+                raise FloatingPointError(f"non-finite loss at epoch {epoch} step {s.step}")
+            opt.zero_grad(set_to_none=True)
+            scaler.scale(loss).backward()
+            scaler.step(opt)
+            scaler.update()
+            sched.step()
+
+            s.step += 1
+            s.epoch_seen.extend(batch.indices)
+            s.sums["cls"] += losses["classification"].detach().item()
+            s.sums["reg"] += losses["bbox_regression"].detach().item()
+            s.sums["l2sp"] += l2.detach().item()
+            s.sums["batches"] += 1
+            trained += len(batch.indices)
+            if time.monotonic() - last_save >= cfg.ckpt_every_min * 60 and s.step < steps:
+                last_path = save_state(checkpoint_name(epoch, s.step))
+                last_save = time.monotonic()
+        train_s = time.monotonic() - t_epoch
+
+        batches = max(s.sums["batches"], 1)
+        metrics = {
+            "train/loss_cls": s.sums["cls"] / batches,
+            "train/loss_reg": s.sums["reg"] / batches,
+            "train/l2sp": s.sums["l2sp"] / batches,
+            "train/lr": float(sched.get_last_lr()[0]),
+            "train/samples_per_s": trained / train_s if train_s > 0 else 0.0,
+        }
+        if val_units:
+            v = _validate(model, device, val_units, InferenceParams(), epoch)
+            metrics |= {f"val/{k}": float(value) for k, value in v.items()}
+            if v["seconds"] > 0.15 * (train_s + v["seconds"]):
+                logger.warning(
+                    f"validation took {v['seconds']:.1f} s, over 15% of the epoch's wall time: "
+                    "cap the val set"
+                )
+            f1, ap = v["f1_max"], v["ap40"]
+            improved = f1 > s.best_f1 + cfg.min_delta or (
+                abs(f1 - s.best_f1) <= cfg.min_delta and ap > s.best_ap
+            )
+        else:
+            improved = True
+        if improved:
+            if val_units:
+                s.best_f1, s.best_ap = max(s.best_f1, f1), ap
+            s.patience_left = cfg.patience
+            s.best_metrics = dict(metrics)
+            save_file(model.state_dict(), out_dir, "best.pt", tmp_dir=tmp_dir, keep_last=None)
+        else:
+            s.patience_left -= 1
+
+        s.history.append(
+            {
+                "epoch": epoch,
+                **metrics,
+                **stats,
+                "sampler/plan_sha256": _plan_sha256(specs),
+                "sampler/sample_ids_sha256": hashlib.sha256(
+                    "\n".join(map(str, s.epoch_seen)).encode()
+                ).hexdigest(),
+                "improved": improved,
+            }
+        )
+        _write_metrics_csv(out_dir / "metrics.csv", s.history)
+
+        s.epoch, s.step, s.epoch_seen, s.sums = epoch + 1, 0, [], _fresh_sums()
+        s.done = s.patience_left == 0 or epoch + 1 == cfg.epochs
+        last_path = save_state(checkpoint_name(epoch + 1, 0))
+        last_save = time.monotonic()
+        if on_epoch_end is not None:
+            on_epoch_end({k: float(v) for k, v in {**metrics, **stats}.items()}, epoch)
+        if s.patience_left == 0:
+            break
+    return TrainResult(out_dir / "best.pt", last_path, s.best_metrics, s.history)
+
+
+def fine_tune(
+    train_chips: Sequence[Path],
+    val_chips: Sequence[Path],
+    labels_path: Path,
+    hyperparameters: Mapping | None,
+    *,
+    weights: Path,
+    out_dir: Path,
+    on_epoch_end=None,
+    resume: bool = True,
+    **train_kwargs,
+) -> TrainResult:
+    """Fine-tune on a mapper's chips, already split into train and val by fAIr; no internal re-split.
+
+    Without explicit `zoom_weights`, every zoom present in the train chips gets weight 1, so a z18 or z22
+    dataset is never filtered out by the base-training defaults.
+    """
+    cfg = parse_train_params(hyperparameters)
+    train_regions = load_fair_dataset(train_chips, labels_path, split="train")
+    val_regions = load_fair_dataset(val_chips, labels_path, split="val")
+    if (hyperparameters or {}).get("zoom_weights") is None:
+        zooms = sorted({z for r in train_regions for z in r.chips})
+        cfg = dataclasses.replace(cfg, zoom_weights={z: 1.0 for z in zooms})
+    return train(
+        cfg,
+        train_regions,
+        val_regions,
+        weights=weights,
+        out_dir=out_dir,
+        on_epoch_end=on_epoch_end,
+        resume=resume,
+        **train_kwargs,
+    )
