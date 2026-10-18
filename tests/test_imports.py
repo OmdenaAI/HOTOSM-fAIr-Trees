@@ -8,7 +8,7 @@ import pytest
 CODE = "import sys, {mod}; print(sorted(m for m in ('torch', 'torchvision', 'scipy') if m in sys.modules))"
 
 
-@pytest.mark.parametrize("mod", ["fair_trees", "fair_trees.serve"])
+@pytest.mark.parametrize("mod", ["fair_trees", "fair_trees.serve", "fair_trees.evaluate"])
 def test_serving_imports_stay_light(mod):
     out = subprocess.run(
         [sys.executable, "-c", CODE.format(mod=mod)], capture_output=True, text=True, check=True
