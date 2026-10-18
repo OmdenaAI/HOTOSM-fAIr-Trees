@@ -147,8 +147,10 @@ class EvalReport:
             "f1_max": float(self.f1_max),
             "conf_at_max": float(self.conf_at_max),
             "sweep": [dict(s) for s in self.sweep],
-            "units": [{**u, "meta": dict(u["meta"])} for u in self.units],
-            "breakdown": {k: {v: dict(m) for v, m in vs.items()} for k, vs in self.breakdown.items()},
+            "units": [{**u, "meta": {str(k): str(v) for k, v in u["meta"].items()}} for u in self.units],
+            "breakdown": {
+                str(k): {str(v): dict(m) for v, m in vs.items()} for k, vs in self.breakdown.items()
+            },
         }
 
     def unit_counts(self) -> list[Counts]:
@@ -193,7 +195,9 @@ def evaluate_units(
     decode_threshold: float = DECODE_THRESHOLD,
 ) -> EvalReport:
     """Decode each unit once at a low threshold, then score at the operating point and a sweep."""
-    low_params = dataclasses.replace(params, confidence_threshold=decode_threshold)
+    low_params = dataclasses.replace(
+        params, confidence_threshold=min(decode_threshold, params.confidence_threshold)
+    )
     decoded = []
     for u in units:
         dets = predict_mosaic(run_fn, u.mosaic, low_params)

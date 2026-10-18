@@ -38,6 +38,14 @@ def _read_boxes(xml_path: Path) -> np.ndarray:
     return np.asarray(boxes, np.float32).reshape(-1, 4)
 
 
+def site_code(stem: str) -> str:
+    """First four-letter alphabetic token of a plot name (NEON site code), else "unknown"."""
+    for token in stem.split("_"):
+        if len(token) == 4 and token.isascii() and token.isalpha():
+            return token
+    return "unknown"
+
+
 def load_eval_plots(root: Path) -> list[EvalUnit]:
     """One EvalUnit per annotated plot with an RGB image; plots without one are skipped with a warning."""
     units = []
@@ -49,6 +57,6 @@ def load_eval_plots(root: Path) -> list[EvalUnit]:
             continue
         with rasterio.open(image) as src:
             rgb = np.ascontiguousarray(src.read([1, 2, 3]).transpose(1, 2, 0))
-        meta = {"source": "neon", "site": stem.split("_")[0], "zoom": "native"}
+        meta = {"source": "neon", "site": site_code(stem), "zoom": "native"}
         units.append(EvalUnit(stem, array_mosaic(rgb, gsd_m=NEON_GSD_M), _read_boxes(xml_path), None, meta))
     return units

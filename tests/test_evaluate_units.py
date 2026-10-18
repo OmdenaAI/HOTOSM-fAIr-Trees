@@ -64,3 +64,20 @@ def test_report_with_no_units_is_finite(run):
     d = r.to_dict()
     json.dumps(d, allow_nan=False)
     assert d["f1"] == 0.0 and d["ap40"] == 0.0 and d["units"] == []
+
+
+def test_report_survives_non_string_meta(run):
+    unit = _unit("u1", [[123, 123, 133, 133]])
+    unit = EvalUnit(unit.unit_id, unit.mosaic, unit.gt_boxes, None, {"zoom": np.int64(20), 3: 4})
+    d = evaluate_units(run, [unit], PARAMS).to_dict()
+    assert json.loads(json.dumps(d, allow_nan=False)) == d
+    assert d["units"][0]["meta"] == {"zoom": "20", "3": "4"}
+    assert d["breakdown"]["zoom"]["20"]["n_units"] == 1
+
+
+def test_decodes_below_a_low_operating_point(fake_session):
+    weak = ort_run_fn(fake_session({CENTRE_ANCHOR_800: -6.0}))  # score 0.0025
+    r = evaluate_units(
+        weak, [_unit("u1", [[123, 123, 133, 133]])], InferenceParams(confidence_threshold=0.002)
+    )
+    assert r.units[0]["tp"] == 1

@@ -7,7 +7,9 @@ import rasterio
 
 pytest.importorskip("scipy")
 
-from experiments.neon_eval import DF_COMPAT, load_eval_plots  # noqa: E402
+pytestmark = pytest.mark.filterwarnings("ignore::rasterio.errors.NotGeoreferencedWarning")
+
+from experiments.neon_eval import DF_COMPAT, load_eval_plots, site_code  # noqa: E402
 from experiments.neon_repro import run_neon_repro  # noqa: E402
 from fair_trees.serve import ort_run_fn  # noqa: E402
 
@@ -65,3 +67,11 @@ def test_run_neon_repro_writes_eval_json(neon_root, fake_session, tmp_path):
     assert saved == payload
     assert set(saved) >= {"f1", "precision", "recall", "f1_ci95", "published_f1", "pass", "units"}
     assert saved["published_f1"] == 0.719 and saved["pass"] is False  # no detections -> F1 0
+
+
+@pytest.mark.parametrize(
+    "stem, site",
+    [("SJER_026_2018", "SJER"), ("2018_SJER_3_252000_4104000_image_628", "SJER"), ("x_7", "unknown")],
+)
+def test_site_code(stem, site):
+    assert site_code(stem) == site
