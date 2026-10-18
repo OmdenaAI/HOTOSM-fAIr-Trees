@@ -1,0 +1,17 @@
+# Short run used twice (once uninterrupted, once killed and resumed) to check exact resume.
+weights: weights/NEON.pt
+sources: [neon]
+hyperparameters:
+  trainable_layers: 0
+  learning_rate: 0.001
+  epochs: 2
+  patience: 3
+  batch_size: 4
+  samples_per_epoch: 400
+  ckpt_every_min: 10
+  amp: true
+  seed: 7
+val:
+  zooms: [20, 19]
+  max_regions: 20
+mlflow: false
