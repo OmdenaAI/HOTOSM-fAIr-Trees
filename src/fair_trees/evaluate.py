@@ -247,3 +247,52 @@ def evaluate_units(
         units=unit_rows,
         breakdown=breakdown,
     )
+
+
+def _stack(units: Sequence[Counts]) -> np.ndarray:
+    return np.array([(c.tp, c.fp, c.fn) for c in units], dtype=np.int64).reshape(-1, 3)
+
+
+def _f1_from_sums(sums: np.ndarray) -> np.ndarray:
+    """Vectorised F1 of (n, 3) tp/fp/fn sums; zero denominators give 0, as in ``prf``."""
+    tp = sums[:, 0].astype(np.float64)
+    denom = 2.0 * tp + sums[:, 1] + sums[:, 2]
+    return np.divide(2.0 * tp, denom, out=np.zeros_like(tp), where=denom > 0)
+
+
+def _resample_sums(stacked: np.ndarray, idx: np.ndarray) -> np.ndarray:
+    return stacked[idx].sum(axis=1)
+
+
+def _quantile_bounds(values: np.ndarray, level: float) -> tuple[float, float]:
+    lo, hi = np.quantile(values, [(1 - level) / 2, (1 + level) / 2])
+    return float(lo), float(hi)
+
+
+def bootstrap_ci(
+    units: Sequence[Counts], *, n: int = 1000, seed: int = 0, level: float = 0.95
+) -> tuple[float, float]:
+    """Percentile CI of pooled F1 from resampling units with replacement (seeded)."""
+    if len(units) == 0:
+        return 0.0, 0.0
+    stacked = _stack(units)
+    idx = np.random.default_rng(seed).integers(0, len(units), size=(n, len(units)))
+    return _quantile_bounds(_f1_from_sums(_resample_sums(stacked, idx)), level)
+
+
+def paired_bootstrap_diff(
+    a: Sequence[Counts], b: Sequence[Counts], *, n: int = 1000, seed: int = 0, level: float = 0.95
+) -> tuple[float, float, float]:
+    """(point, lo, hi) for pooled F1(a) - F1(b), resampling the same units for both sides."""
+    if len(a) != len(b):
+        raise ValueError(f"paired bootstrap needs the same units, got {len(a)} and {len(b)}")
+    if len(a) == 0:
+        return 0.0, 0.0, 0.0
+    sa, sb = _stack(a), _stack(b)
+    point = float(
+        _f1_from_sums(sa.sum(axis=0, keepdims=True))[0] - _f1_from_sums(sb.sum(axis=0, keepdims=True))[0]
+    )
+    idx = np.random.default_rng(seed).integers(0, len(a), size=(n, len(a)))
+    diffs = _f1_from_sums(_resample_sums(sa, idx)) - _f1_from_sums(_resample_sums(sb, idx))
+    lo, hi = _quantile_bounds(diffs, level)
+    return point, lo, hi
