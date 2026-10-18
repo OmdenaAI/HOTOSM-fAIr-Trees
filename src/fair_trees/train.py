@@ -206,6 +206,8 @@ def _checkpoints(out_dir: Path) -> list[tuple[tuple[int, int], Path]]:
 
 def save_file(obj, out_dir: Path, name: str, *, tmp_dir: Path, keep_last: int | None = None) -> Path:
     """Save locally, copy to `<name>.part`, check the size, rename; rotate only after the rename."""
+    if keep_last is not None and keep_last < 1:
+        raise ValueError(f"keep_last must be None or >= 1, got {keep_last}")
     out_dir.mkdir(parents=True, exist_ok=True)
     tmp_dir.mkdir(parents=True, exist_ok=True)
     local = tmp_dir / name
@@ -224,7 +226,8 @@ def save_file(obj, out_dir: Path, name: str, *, tmp_dir: Path, keep_last: int | 
     finally:
         local.unlink(missing_ok=True)
     if keep_last is not None:
-        for _, old in _checkpoints(out_dir)[: -keep_last or None]:
+        existing = _checkpoints(out_dir)
+        for _, old in existing[: max(len(existing) - keep_last, 0)]:
             old.unlink()
     return out_dir / name
 

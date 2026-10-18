@@ -95,3 +95,12 @@ def test_check_resume_warns_on_repo_change(caplog):
     with caplog.at_level(logging.WARNING, logger="fair_trees.train"):
         check_resume(state, config_hash="a", w0_hash="w", manifest_hash="m", repo_sha="r2", force=False)
     assert "repo" in caplog.text
+
+
+@pytest.mark.parametrize("keep_last", [0, -1])
+def test_keep_last_below_one_is_refused_before_writing(tmp_path, keep_last):
+    out, tmp = tmp_path / "run", tmp_path / "tmp"
+    save_file({"step": 0}, out, checkpoint_name(0, 0), tmp_dir=tmp, keep_last=4)
+    with pytest.raises(ValueError, match="keep_last"):
+        save_file({"step": 1}, out, checkpoint_name(0, 1), tmp_dir=tmp, keep_last=keep_last)
+    assert _ckpts(out) == [checkpoint_name(0, 0)]
