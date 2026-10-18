@@ -3,3 +3,4 @@ mlflow
 huggingface_hub
 shapely
 geopandas
+deepforest==2.1.0

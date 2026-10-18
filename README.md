@@ -22,4 +22,8 @@ uv run pytest -m integration     # opt-in parity; needs weights/NEON.pt and test
 The opt-in parity tests need two local downloads (`weights/NEON.pt` and `tests/data_local/OSBS_029.tif`).
 `experiments/DATA_SOURCES.md` lists the URLs, sha256 values and the download commands.
 
+The DeepForest parity test needs `deepforest==2.1.0` (see `experiments/requirements.txt`) in its own
+environment, `.venv-df`, and is run from there (Windows):
+`.venv-df/Scripts/python.exe -m pytest -m integration tests/integration/test_deepforest_parity.py`
+
 See theory.md for the model facts and CLAUDE.md for the repository rules.

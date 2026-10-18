@@ -63,6 +63,7 @@ name = "fair-trees"
 version = "0.1.0.dev0"
 source = { editable = "." }
 dependencies = [
+    { name = "affine" },
     { name = "numpy" },
     { name = "pillow" },
     { name = "pyproj" },
@@ -86,6 +87,7 @@ train = [
 
 [package.metadata]
 requires-dist = [
+    { name = "affine", specifier = ">=2.3" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "onnx", marker = "extra == 'train'", specifier = ">=1.17" },
     { name = "onnxruntime", marker = "extra == 'test'", specifier = ">=1.18" },

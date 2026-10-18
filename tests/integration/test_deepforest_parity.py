@@ -5,7 +5,6 @@ import pytest
 
 pytestmark = pytest.mark.integration
 torch = pytest.importorskip("torch")
-pytest.importorskip("deepforest")
 pytest.importorskip("scipy")
 
 from experiments.neon_eval import DF_COMPAT  # noqa: E402
@@ -14,12 +13,15 @@ from fair_trees.preprocess import array_mosaic  # noqa: E402
 from fair_trees.serve import predict_mosaic  # noqa: E402
 from fair_trees.train import torch_run_fn  # noqa: E402
 
+DF_REVISION = "cc21436bc5d572dde8ff5f93c1e71a32f563cace"  # weecology/deepforest-tree commit
+
 
 def test_end_to_end_matches_deepforest(neon_model, sample_rgb, sample_path):
+    pytest.importorskip("deepforest")
     from deepforest import main
 
     df_model = main.deepforest()
-    df_model.load_model("weecology/deepforest-tree")
+    df_model.load_model("weecology/deepforest-tree", revision=DF_REVISION)
     df = df_model.predict_tile(path=str(sample_path), patch_size=400, patch_overlap=0.05, iou_threshold=0.15)
     theirs = df[["xmin", "ymin", "xmax", "ymax"]].to_numpy(np.float32)
     their_scores = df["score"].to_numpy(np.float32)
