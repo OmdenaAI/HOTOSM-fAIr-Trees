@@ -12,7 +12,7 @@ from PIL import Image, ImageEnhance
 
 # Open values: pending a check of DeepForest's Downscale config and the unit of "hue +-10" [?].
 DOWNSCALE_RANGE = (0.5, 1.0)  # [?]
-DOWNSCALE_P = 0.5  # [?]
+DOWNSCALE_P = 0.5  # [?] probability of calling downscale; the caller applies it
 HUE_JITTER = 10.0  # degrees [?]
 
 
@@ -27,7 +27,7 @@ def downscale(
         return rgb.copy()
     img = Image.fromarray(rgb)
     img = img.resize(small, Image.Resampling.BOX).resize((w, h), Image.Resampling.BILINEAR)
-    return np.asarray(img)
+    return np.array(img)
 
 
 def flip(img: np.ndarray, boxes: np.ndarray, rng: np.random.Generator) -> tuple[np.ndarray, np.ndarray]:
@@ -83,4 +83,4 @@ def colour_jitter(
         hsv = np.asarray(img.convert("HSV")).copy()
         hsv[..., 0] += np.uint8(shift)  # uint8 wraps modulo 256
         img = Image.fromarray(hsv, "HSV").convert("RGB")
-    return np.asarray(img)
+    return np.array(img)

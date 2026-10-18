@@ -69,3 +69,9 @@ def test_colour_jitter_seeded_and_zero_is_identity():
     assert a.shape == rgb.shape and a.dtype == np.uint8 and not np.array_equal(a, rgb)
     same = colour_jitter(rgb, np.random.default_rng(2), brightness=0, contrast=0, saturation=0, hue=0)
     np.testing.assert_array_equal(same, rgb)
+
+
+def test_outputs_are_writable():
+    rgb = _img(c=3)
+    assert downscale(rgb, np.random.default_rng(1)).flags.writeable
+    assert colour_jitter(rgb, np.random.default_rng(2)).flags.writeable
