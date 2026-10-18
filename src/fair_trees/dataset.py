@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+from collections import Counter, OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,12 +19,16 @@ import rasterio.features
 from affine import Affine
 from pyproj import Transformer
 
-from fair_trees.georef import mercator_y_to_lat, parse_oam_name, tile_bounds_3857, true_gsd
-from fair_trees.preprocess import tile_groups
+from fair_trees.georef import ORIGIN_SHIFT, mercator_y_to_lat, parse_oam_name, tile_bounds_3857, true_gsd
+from fair_trees.params import TrainParams
+from fair_trees.preprocess import Window, read_chip, tile_groups
 
 logger = logging.getLogger(__name__)
 
 MIN_BOX_FRACTION = 0.4
+MAX_MASKED = 0.8  # a crop with more masked area than this is redrawn
+CROP_RETRIES = 20
+LOWRES_CELLS = 16  # low-resolution mask cells per tile side
 _TO_3857 = Transformer.from_crs(4326, 3857, always_xy=True)
 _REQUIRED_KEYS = ("id", "source", "biome", "licence", "split", "footprint", "valid_area_m2")
 
@@ -323,3 +329,300 @@ def spatial_split(
     train = [item for i, item in enumerate(chip_names) if i not in val_set]
     val = [item for i, item in enumerate(chip_names) if i in val_set]
     return train, val
+
+
+@dataclass(frozen=True)
+class SampleSpec:
+    """One planned training crop: where it is, how big it is, and the seed of its augmentation."""
+
+    region_id: str
+    zoom: int
+    centre_px: tuple[float, float]  # region pixel frame
+    size_m: float
+    aug_seed: int
+
+
+@dataclass(frozen=True, eq=False)
+class RegionGeom:
+    """A region at one zoom: its tile grid, pixel frame, label boxes and low-resolution mask.
+
+    The pixel frame starts at the north-west corner of tile ``(xmin, ymin)``; absent tiles are holes.
+    ``lowres_masked`` has one cell per ``cell_px`` x ``cell_px`` pixels, True = absent tile or masked.
+    """
+
+    tiles: Mapping[tuple[int, int], Path]
+    xmin: int
+    ymin: int
+    ncols: int
+    nrows: int
+    tile_px: int
+    transform_3857: Affine
+    gsd_m: float
+    boxes: np.ndarray
+    lowres_masked: np.ndarray
+    cell_px: int
+
+    @property
+    def width(self) -> int:
+        return self.ncols * self.tile_px
+
+    @property
+    def height(self) -> int:
+        return self.nrows * self.tile_px
+
+
+def _build_geom(region: Region, zoom: int) -> RegionGeom:
+    tiles = {}
+    for path in region.chips[zoom]:
+        x, y, _ = parse_oam_name(path)
+        tiles[(x, y)] = Path(path)
+    xs = [x for x, _ in tiles]
+    ys = [y for _, y in tiles]
+    xmin, ymin = min(xs), min(ys)
+    ncols, nrows = max(xs) - xmin + 1, max(ys) - ymin + 1
+    with rasterio.open(region.chips[zoom][0]) as ds:
+        tile_px = ds.width
+    minx, _, _, maxy = tile_bounds_3857(xmin, ymin, zoom)
+    res = 2 * ORIGIN_SHIFT / 2**zoom / tile_px
+    transform_3857 = Affine(res, 0, minx, 0, -res, maxy)
+    gsd_m = true_gsd(zoom, mercator_y_to_lat(maxy - nrows * tile_px * res / 2))
+    boxes = labels_to_boxes(load_geojson(region.labels_path), transform_3857)
+
+    cells = LOWRES_CELLS if tile_px % LOWRES_CELLS == 0 else 1
+    cell_px = tile_px // cells
+    shape = (nrows * cells, ncols * cells)
+    lowres = rasterize_mask(region, transform_3857 @ Affine.scale(cell_px), shape)
+    for r in range(nrows):
+        for c in range(ncols):
+            if (xmin + c, ymin + r) not in tiles:
+                lowres[r * cells : (r + 1) * cells, c * cells : (c + 1) * cells] = True
+    return RegionGeom(
+        tiles=tiles,
+        xmin=xmin,
+        ymin=ymin,
+        ncols=ncols,
+        nrows=nrows,
+        tile_px=tile_px,
+        transform_3857=transform_3857,
+        gsd_m=gsd_m,
+        boxes=boxes,
+        lowres_masked=lowres,
+        cell_px=cell_px,
+    )
+
+
+def _window(geom: RegionGeom, centre_px: tuple[float, float], size_m: float) -> Window:
+    """Square crop of ``size_m`` metres around ``centre_px``, clamped inside the region frame."""
+    n = max(1, int(round(size_m / geom.gsd_m)))
+    cx, cy = centre_px
+    x0 = min(max(int(round(cx - n / 2)), 0), geom.width - n)
+    y0 = min(max(int(round(cy - n / 2)), 0), geom.height - n)
+    return Window(x0, y0, n, n)
+
+
+def _masked_fraction(geom: RegionGeom, w: Window) -> float:
+    c0, c1 = w.x // geom.cell_px, math.ceil((w.x + w.width) / geom.cell_px)
+    r0, r1 = w.y // geom.cell_px, math.ceil((w.y + w.height) / geom.cell_px)
+    return float(geom.lowres_masked[r0:r1, c0:c1].mean())
+
+
+def _is_empty(geom: RegionGeom, w: Window) -> bool:
+    cx = (geom.boxes[:, 0] + geom.boxes[:, 2]) / 2
+    cy = (geom.boxes[:, 1] + geom.boxes[:, 3]) / 2
+    inside = (cx >= w.x) & (cx < w.x + w.width) & (cy >= w.y) & (cy < w.y + w.height)
+    return not inside.any()
+
+
+def _tiles_present(geom: RegionGeom, w: Window) -> bool:
+    cols = range(w.x // geom.tile_px, (w.x + w.width - 1) // geom.tile_px + 1)
+    rows = range(w.y // geom.tile_px, (w.y + w.height - 1) // geom.tile_px + 1)
+    return all((geom.xmin + c, geom.ymin + r) in geom.tiles for r in rows for c in cols)
+
+
+class RegionCache:
+    """Per-process cache of region geometry and decoded chips.
+
+    It pickles without its caches, so each DataLoader worker rebuilds what it reads.
+    """
+
+    def __init__(self, regions: Sequence[Region], *, max_chips: int = 256):
+        self._regions = {r.id: r for r in regions}
+        self.max_chips = max_chips
+        self._geoms: dict[tuple[str, int], RegionGeom] = {}
+        self._chips: OrderedDict[Path, tuple[np.ndarray, np.ndarray]] = OrderedDict()
+
+    def __getstate__(self) -> dict:
+        return {"_regions": self._regions, "max_chips": self.max_chips}
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._geoms = {}
+        self._chips = OrderedDict()
+
+    def region(self, region_id: str) -> Region:
+        return self._regions[region_id]
+
+    def geom(self, region_id: str, zoom: int) -> RegionGeom:
+        key = (region_id, zoom)
+        if key not in self._geoms:
+            self._geoms[key] = _build_geom(self._regions[region_id], zoom)
+        return self._geoms[key]
+
+    def chip(self, path: Path) -> tuple[np.ndarray, np.ndarray]:
+        """``(rgb, valid)`` of a chip; least-recently-used entries are evicted beyond ``max_chips``."""
+        path = Path(path)
+        if path in self._chips:
+            self._chips.move_to_end(path)
+            return self._chips[path]
+        rgb, valid, _ = read_chip(path, use_sidecar=False)
+        self._chips[path] = (rgb, valid)
+        while len(self._chips) > self.max_chips:
+            self._chips.popitem(last=False)
+        return rgb, valid
+
+    def crop_window(self, spec: SampleSpec) -> Window:
+        return _window(self.geom(spec.region_id, spec.zoom), spec.centre_px, spec.size_m)
+
+    def masked_fraction(self, spec: SampleSpec) -> float:
+        """Masked share of the crop on the low-resolution mask (absent tiles count as masked)."""
+        return _masked_fraction(self.geom(spec.region_id, spec.zoom), self.crop_window(spec))
+
+    def is_empty(self, spec: SampleSpec) -> bool:
+        """True when no label box centre lies inside the crop."""
+        return _is_empty(self.geom(spec.region_id, spec.zoom), self.crop_window(spec))
+
+
+def total_chips(regions: Sequence[Region]) -> int:
+    return sum(len(paths) for r in regions for paths in r.chips.values())
+
+
+def _probabilities(weights: Sequence[float]) -> np.ndarray:
+    """Normalised weights; uniform when they sum to 0."""
+    w = np.asarray(weights, np.float64)
+    total = w.sum()
+    return w / total if total > 0 else np.full(len(w), 1 / len(w))
+
+
+def _fallback_centre(geom: RegionGeom, rng: np.random.Generator) -> tuple[float, float]:
+    """Centre of a random present tile, preferring tiles that are not mostly masked."""
+    cells = geom.tile_px // geom.cell_px
+    present = sorted(geom.tiles)
+    good = [
+        (x, y)
+        for x, y in present
+        if geom.lowres_masked[
+            (y - geom.ymin) * cells : (y - geom.ymin + 1) * cells,
+            (x - geom.xmin) * cells : (x - geom.xmin + 1) * cells,
+        ].mean()
+        <= MAX_MASKED
+    ]
+    candidates = good or present
+    x, y = candidates[int(rng.integers(len(candidates)))]
+    return ((x - geom.xmin + 0.5) * geom.tile_px, (y - geom.ymin + 0.5) * geom.tile_px)
+
+
+def _draw(rng: np.random.Generator, items: Sequence, weights: Sequence[float]):
+    return items[rng.choice(len(items), p=_probabilities(weights))]
+
+
+def plan_epoch(
+    regions: Sequence[Region],
+    cfg: TrainParams,
+    seed: int,
+    epoch: int,
+    *,
+    cache: RegionCache | None = None,
+) -> list[SampleSpec]:
+    """The epoch's crops, a pure function of ``(regions, cfg, seed, epoch)``.
+
+    Each sample draws a source (``p ~ area ** source_alpha``), a biome within it (``biome_alpha``), a
+    region within that (``p ~ valid area``), a zoom (``zoom_weights``), a size and a centre. A centre
+    that puts the crop on an absent tile, over ``MAX_MASKED`` masked or past the empty-crop cap is
+    redrawn, up to ``CROP_RETRIES`` times, before the crop falls back to one whole present tile.
+    """
+    if cache is None:
+        cache = RegionCache(regions)
+    rng = np.random.default_rng([seed, epoch])
+    n = cfg.samples_per_epoch or total_chips(regions)
+
+    eligible = []
+    for region in sorted(regions, key=lambda r: r.id):
+        if any(cfg.zoom_weights.get(z, 0) > 0 for z in region.chips):
+            eligible.append(region)
+        else:
+            logger.warning(f"region {region.id}: no zoom with a positive zoom weight, skipped")
+    if not eligible:
+        raise ValueError("no region has a zoom with a positive zoom weight")
+
+    counts: Counter[str] = Counter()
+    drawn: Counter[str] = Counter()
+    empties: Counter[str] = Counter()
+    specs = []
+    for _ in range(n):
+        cap = cfg.region_repeat_cap
+        open_regions = [r for r in eligible if cap is None or counts[r.id] < cap]
+        if not open_regions:
+            raise ValueError("region_repeat_cap too small for samples_per_epoch")
+
+        sources = sorted({r.source for r in open_regions})
+        areas = [sum(r.valid_area_m2 for r in open_regions if r.source == s) for s in sources]
+        source = _draw(rng, sources, np.power(areas, cfg.source_alpha))
+        in_source = [r for r in open_regions if r.source == source]
+        biomes = sorted({r.biome for r in in_source})
+        areas = [sum(r.valid_area_m2 for r in in_source if r.biome == b) for b in biomes]
+        biome = _draw(rng, biomes, np.power(areas, cfg.biome_alpha))
+        in_biome = [r for r in in_source if r.biome == biome]
+        region = _draw(rng, in_biome, [r.valid_area_m2 for r in in_biome])
+        zooms = sorted(region.chips)
+        zoom = _draw(rng, zooms, [cfg.zoom_weights.get(z, 0) for z in zooms])
+        geom = cache.geom(region.id, zoom)
+
+        size_m = rng.uniform(*cfg.augment.crop_m)
+        size_m = min(size_m, min(geom.width, geom.height) * geom.gsd_m)
+        n_px = max(1, round(size_m / geom.gsd_m))
+        centre = None
+        for _ in range(CROP_RETRIES):
+            cx = rng.uniform(n_px / 2, geom.width - n_px / 2)
+            cy = rng.uniform(n_px / 2, geom.height - n_px / 2)
+            w = _window(geom, (cx, cy), size_m)
+            if not _tiles_present(geom, w) or _masked_fraction(geom, w) > MAX_MASKED:
+                continue
+            capped = cfg.empty_crop_cap is not None and _is_empty(geom, w)
+            if capped and empties[source] + 1 > cfg.empty_crop_cap * (drawn[source] + 1):
+                continue
+            centre = (float(cx), float(cy))
+            break
+        if centre is None:
+            centre = _fallback_centre(geom, rng)
+            size_m = geom.tile_px * geom.gsd_m
+
+        spec = SampleSpec(region.id, zoom, centre, float(size_m), int(rng.integers(0, 2**31 - 1)))
+        specs.append(spec)
+        counts[region.id] += 1
+        drawn[source] += 1
+        empties[source] += _is_empty(geom, _window(geom, centre, size_m))
+    return specs
+
+
+def sampler_stats(specs: Sequence[SampleSpec], cache: RegionCache) -> dict[str, float]:
+    """Draws per source, biome and zoom, region repeat max and mean, and the empty-crop share per source."""
+    sources: Counter[str] = Counter()
+    biomes: Counter[str] = Counter()
+    zooms: Counter[int] = Counter()
+    repeats: Counter[str] = Counter()
+    empty: Counter[str] = Counter()
+    for spec in specs:
+        region = cache.region(spec.region_id)
+        sources[region.source] += 1
+        biomes[region.biome] += 1
+        zooms[spec.zoom] += 1
+        repeats[spec.region_id] += 1
+        empty[region.source] += cache.is_empty(spec)
+    stats = {f"sampler/draws/source/{s}": float(c) for s, c in sorted(sources.items())}
+    stats |= {f"sampler/draws/biome/{b}": float(c) for b, c in sorted(biomes.items())}
+    stats |= {f"sampler/draws/zoom/{z}": float(c) for z, c in sorted(zooms.items())}
+    if repeats:
+        stats["sampler/region_repeat_max"] = float(max(repeats.values()))
+        stats["sampler/region_repeat_mean"] = float(np.mean(list(repeats.values())))
+    stats |= {f"sampler/empty_share/{s}": empty[s] / c for s, c in sorted(sources.items())}
+    return stats
