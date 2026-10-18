@@ -60,6 +60,13 @@ def test_block_split_test_share():
     assert 0.15 <= s.count("test") / len(s) <= 0.3 and 0.15 <= s.count("val") / len(s) <= 0.3
 
 
+@pytest.mark.parametrize("kw", [{"val_ratio": 0.9}, {"val_ratio": 0.5, "test_ratio": 0.45}])
+def test_block_split_train_keeps_a_block(kw):
+    tiles = [(X0, Y0, 20), (X0 + 8, Y0, 20)]  # two blocks of one tile
+    s = block_split(tiles, block_size=1, seed=0, buffer_m=0.0, **kw)
+    assert "train" in s
+
+
 @pytest.mark.parametrize("kw", [{"val_ratio": 0.6, "test_ratio": 0.5}, {"block_size": 0}, {"val_ratio": 0.0}])
 def test_block_split_bad_arguments(kw):
     args = {"block_size": 2, "val_ratio": 0.2, "seed": 0} | kw

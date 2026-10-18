@@ -50,8 +50,8 @@ def block_split(
     sides = ["train"] * n
     for rank, k in enumerate(order):
         idx = blocks[keys[k]]
-        if rank == len(order) - 1 and all(s != "train" for s in sides):
-            break  # train keeps at least one block
+        if rank == len(order) - 1:
+            break  # the last block always stays train
         side = next((s for s in ("test", "val") if got[s] < want[s]), None)
         if side is None:
             break
