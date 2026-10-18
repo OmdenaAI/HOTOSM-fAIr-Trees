@@ -74,4 +74,4 @@ Tags: [V] verified (source code, checkpoint, dataset card, paper, or arithmetic 
 - A box is kept if at least 40% of its area is inside the crop and unmasked (pixel-centre count) [P].
 - Masked and nodata pixels are set to 0 after colour jitter, so they match partial-nodata windows at serving [P].
 - Downscale range (0.5, 1.0) with p 0.5, and hue jitter in degrees, are placeholders pending DeepForest's
-  Downscale config and the unit of PLAN's "hue +/-10" [?].
+  Downscale config and the unit (degrees or a 0-255 hue channel) of the planned +/-10 hue jitter [?].

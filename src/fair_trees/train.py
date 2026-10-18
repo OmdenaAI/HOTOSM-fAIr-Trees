@@ -326,6 +326,31 @@ def _validate(
     }
 
 
+def _load_scaler_state(scaler: torch.amp.GradScaler, state: Mapping) -> None:
+    """Load a GradScaler state only when both sides use it.
+
+    A disabled scaler (CPU, bf16 or amp off) saves an empty dict, and the device is not in the config
+    hash, so a run may resume under a different AMP mode; the scale then restarts from its default.
+    """
+    if state and scaler.is_enabled():
+        scaler.load_state_dict(state)
+
+
+def _supersede(out_dir: Path) -> Path:
+    """Move an earlier run's checkpoints, best.pt and metrics.csv into `superseded-<n>`; delete nothing."""
+    n = 0
+    while (out_dir / f"superseded-{n}").exists():
+        n += 1
+    dest = out_dir / f"superseded-{n}"
+    dest.mkdir()
+    old = [path for _, path in _checkpoints(out_dir)]
+    old += [out_dir / name for name in ("best.pt", "metrics.csv") if (out_dir / name).exists()]
+    for path in old:
+        os.replace(path, dest / path.name)
+    logger.warning(f"force=True with resume=False: moved the earlier run's {len(old)} files to {dest}")
+    return dest
+
+
 def _plan_sha256(specs: Sequence[SampleSpec]) -> str:
     lines = (
         f"{s.region_id}|{s.zoom}|{s.centre_px[0]:.6f}|{s.centre_px[1]:.6f}|{s.size_m:.6f}|{s.aug_seed}"
@@ -406,10 +431,12 @@ def train(
         model.load_state_dict(state["model"])
         opt.load_state_dict(state["optimizer"])
         sched.load_state_dict(state["scheduler"])
-        scaler.load_state_dict(state["scaler"])
+        _load_scaler_state(scaler, state["scaler"])
         logger.info(f"resuming from {last_path.name}: epoch {s.epoch}, step {s.step}")
-    elif not resume and _checkpoints(out_dir) and not force:
-        raise ValueError("out_dir already holds checkpoints: use resume=True or a new out_dir")
+    elif not resume and _checkpoints(out_dir):
+        if not force:
+            raise ValueError("out_dir already holds checkpoints: use resume=True or a new out_dir")
+        _supersede(out_dir)
 
     # after the resume check, so a finished run returns without reading the val set
     val_units = region_units(val_regions, zooms=val_zooms) if val_regions else []

@@ -191,3 +191,24 @@ def test_fine_tune_on_fair_chips(monkeypatch, write_oam_chip, geo, weights, tmp_
     )
     assert len(res.history) == 2 and script.calls == 4  # 3 train chips per epoch at batch 2: 2 steps
     assert res.history[0]["sampler/draws/zoom/22"] == 3.0
+
+
+@pytest.mark.parametrize("saved_enabled", [False, True])
+def test_scaler_state_crosses_amp_modes(saved_enabled):
+    # a run saved on CPU or with bf16 (disabled scaler) resumes under fp16 (enabled), and the reverse
+    saved = torch.amp.GradScaler("cpu", enabled=saved_enabled).state_dict()
+    target = torch.amp.GradScaler("cpu", enabled=not saved_enabled)
+    T._load_scaler_state(target, saved)
+    assert target.is_enabled() is not saved_enabled
+
+
+def test_forced_fresh_start_supersedes_the_old_run(monkeypatch, regions, weights, tmp_path, caplog):
+    out = tmp_path / "run"
+    first = _run(monkeypatch, Script([0.1, 0.2, 0.3]), regions, weights, out)
+    old_names = sorted(p.name for p in out.iterdir() if p.is_file())
+    with caplog.at_level(logging.WARNING, logger="fair_trees.train"):
+        second = _run(monkeypatch, Script([0.4, 0.5, 0.6]), regions, weights, out, resume=False, force=True)
+    assert sorted(p.name for p in (out / "superseded-0").iterdir()) == old_names
+    assert "superseded-0" in caplog.text
+    assert first.last_checkpoint.name in {p.name for p in out.glob("ckpt-*.pt")}  # the new run's own
+    assert [h["val/f1_max"] for h in second.history] == [0.4, 0.5, 0.6]
