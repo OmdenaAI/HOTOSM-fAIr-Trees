@@ -36,17 +36,26 @@ def measure_loader(
     n_batches: int = 30,
     seed: int = 0,
 ) -> dict[int, float]:
-    """Samples/s of the training loader per worker count; the first batch is warm-up and not timed."""
+    """Samples/s of the training loader per worker count.
+
+    The first ``max(1, 2 * workers)`` batches are warm-up (each worker prefetches two) and not timed.
+    """
     rates = {}
-    plan_cfg = dataclasses.replace(cfg, samples_per_epoch=(n_batches + 1) * cfg.batch_size)
     for w in workers:
+        warm = max(1, w * 2)
+        plan_cfg = dataclasses.replace(cfg, samples_per_epoch=(warm + n_batches) * cfg.batch_size)
         specs = plan_epoch(regions, plan_cfg, seed, 0)
-        samples, start = 0, None
+        samples, timed, start = 0, 0, None
         for i, batch in enumerate(make_loader(specs, regions, cfg, num_workers=w)):
-            if i == 0:
+            if i < warm:
                 start = time.perf_counter()
                 continue
             samples += len(batch.indices)
+            timed += 1
+        if timed < 2:
+            raise ValueError(
+                f"workers={w}: only {timed} batch(es) timed after {warm} warm-up; need at least 2"
+            )
         rates[w] = samples / (time.perf_counter() - start)
         logger.info(f"loader workers={w}: {rates[w]:.1f} samples/s")
     return rates
@@ -75,13 +84,16 @@ def measure_gpu_step(
     images, sizes, targets = _fixed_batch(cfg, dev)
     optimizer = torch.optim.SGD([p for p in model.parameters() if p.requires_grad], lr=1e-4)
     dtype = amp_dtype(dev, cfg.amp)
+    scaler = torch.amp.GradScaler(dev.type, enabled=dtype is torch.float16)
 
     def step() -> None:
-        optimizer.zero_grad()
         with torch.autocast(dev.type, dtype=dtype, enabled=dtype is not None):
-            loss = sum(forward_loss(model, images, sizes, targets).values())
-        loss.backward()
-        optimizer.step()
+            losses = forward_loss(model, images, sizes, targets)
+        loss = losses["classification"].float() + losses["bbox_regression"].float()
+        optimizer.zero_grad(set_to_none=True)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
 
     def sync() -> None:
         if dev.type == "cuda":
@@ -107,7 +119,15 @@ def main(config: Path, run_id: str, *, drive_root: Path, data_root: Path) -> dic
     device = "cuda" if torch.cuda.is_available() else "cpu"
     gpu_step = measure_gpu_step(cfg, weights=Path(drive_root) / conf["weights"], device=device)
     ratio = max(loader.values()) / gpu_step
-    result = {"loader": loader, "gpu_step": gpu_step, "ratio": ratio, "pass": ratio >= PASS_RATIO}
+    dtype = amp_dtype(torch.device(device), cfg.amp)
+    result = {
+        "loader": loader,
+        "gpu_step": gpu_step,
+        "ratio": ratio,
+        "pass": ratio >= PASS_RATIO,
+        "device": device,
+        "amp_dtype": None if dtype is None else str(dtype).removeprefix("torch."),
+    }
     out = Path(drive_root) / "runs" / run_id / "throughput.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2) + "\n")
