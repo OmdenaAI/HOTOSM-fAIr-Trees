@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from experiments.leakage import box_distance_m, near_footprints
-from experiments.split import block_split
+from experiments.split import block_split, group_split
 
 X0 = Y0 = 2**19
 
@@ -72,3 +72,38 @@ def test_block_split_bad_arguments(kw):
     args = {"block_size": 2, "val_ratio": 0.2, "seed": 0} | kw
     with pytest.raises(ValueError):
         block_split([(X0, Y0, 20)], **args)
+
+
+def _row(scene, x0, n):
+    return [(x, Y0, 20) for x in range(X0 + x0, X0 + x0 + n)], [scene] * n
+
+
+def test_group_split_keeps_nearby_scenes_together():
+    tiles, scenes = [], []
+    for scene, x0, n in [("a", 0, 4), ("b", 5, 4), ("c", 100, 4), ("d", 200, 10)]:  # z20 tiles are ~38 m
+        t, s = _row(scene, x0, n)
+        tiles += t
+        scenes += s
+    sides = group_split(tiles, scenes, val_ratio=0.2, seed=0)
+    by_scene = {}
+    for scene, side in zip(scenes, sides, strict=True):
+        by_scene.setdefault(scene, set()).add(side)
+    # a and b are 38 m apart: one group; of the groups {a, b}, {c}, {d}, c alone is closest to 20% of the area
+    assert by_scene == {"a": {"train"}, "b": {"train"}, "c": {"val"}, "d": {"train"}}
+    assert sides == group_split(tiles, scenes, val_ratio=0.2, seed=0)
+
+
+def test_group_split_one_group_has_no_val():
+    tiles, scenes = _row("a", 0, 4)
+    t, s = _row("b", 6, 4)
+    assert group_split(tiles + t, scenes + s, val_ratio=0.2, seed=0) == ["train"] * 8
+
+
+def test_group_split_no_tiles():
+    assert group_split([], [], val_ratio=0.2, seed=0) == []
+
+
+@pytest.mark.parametrize("val_ratio, scenes", [(0.0, ["a"]), (1.0, ["a"]), (0.2, ["a", "b"])])
+def test_group_split_bad_arguments(val_ratio, scenes):
+    with pytest.raises(ValueError):
+        group_split([(X0, Y0, 20)], scenes, val_ratio=val_ratio, seed=0)

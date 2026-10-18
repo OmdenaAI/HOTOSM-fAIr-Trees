@@ -1,7 +1,8 @@
 """NeonTreeEvaluation training rasters to regions, keeping every chip away from the eval plots.
 
 Each annotated training raster is cut into chips per zoom; chips within ``buffer_m`` of an eval plot are
-excluded, the rest are block split per NEON site, and each ``(scene, split)`` pair becomes one region.
+excluded, the rest are group split (rasters closer than ``buffer_m`` stay on one side), and each
+``(scene, split)`` pair becomes one region.
 """
 
 import json
@@ -20,7 +21,7 @@ from affine import Affine
 from rasterio.warp import transform, transform_bounds, transform_geom
 
 from experiments.leakage import near_footprints
-from experiments.split import block_split
+from experiments.split import group_split
 from experiments.tiler import tile_scene
 from fair_trees.georef import parse_oam_name, tile_bounds_4326, true_gsd
 from fair_trees.preprocess import read_chip
@@ -36,7 +37,6 @@ _SITE = re.compile(r"_([A-Z]{4})_")
 
 @dataclass(frozen=True)
 class _Scene:
-    site: str
     labels: list[dict]  # EPSG:4326 polygons
     footprint: dict
     biome: str
@@ -99,14 +99,14 @@ def _box_polygon(box: Sequence[float], affine: Affine) -> dict:
     return {"type": "Polygon", "coordinates": [ring + ring[:1]]}
 
 
-def _read_scene(tif: Path, xml: Path, site: str, biome_fn: Callable[[float, float], str] | None) -> _Scene:
+def _read_scene(tif: Path, xml: Path, biome_fn: Callable[[float, float], str] | None) -> _Scene:
     with rasterio.open(tif) as ds:
         polygons = [_box_polygon(box, ds.transform) for box in voc_boxes(xml)]
         polygons.append(_box_polygon((0, 0, ds.width, ds.height), ds.transform))
         *labels, footprint = transform_geom(ds.crs, "EPSG:4326", polygons)
         cx, cy = ds.transform @ (ds.width / 2, ds.height / 2)
         (lon,), (lat,) = transform(ds.crs, "EPSG:4326", [cx], [cy])
-    return _Scene(site, labels, footprint, biome_fn(lon, lat) if biome_fn else "unknown")
+    return _Scene(labels, footprint, biome_fn(lon, lat) if biome_fn else "unknown")
 
 
 def _write_json(path: Path, obj: dict) -> None:
@@ -154,7 +154,6 @@ def convert(
     out_root: Path,
     *,
     zooms: Sequence[int] = (19, 20),
-    block_size: int = 16,
     val_ratio: float = 0.15,
     seed: int = 42,
     buffer_m: float = 1000.0,
@@ -176,8 +175,7 @@ def convert(
     chips: list[_Chip] = []
     skipped_no_crs = []
     for tif, xml in find_training_rasters(raw_root):
-        match = _SITE.search(tif.stem)
-        if match is None:
+        if _SITE.search(tif.stem) is None:
             logger.warning("%s: no NEON site code in the name, skipped", tif.name)
             continue
         with rasterio.open(tif) as ds:
@@ -188,25 +186,24 @@ def convert(
             logger.warning("%s: training raster has no CRS, skipped", tif.name)
             skipped_no_crs.append(tif.name)
             continue
-        scenes[tif.stem] = _read_scene(tif, xml, match.group(1), biome_fn)
+        scenes[tif.stem] = _read_scene(tif, xml, biome_fn)
         tiled = tile_scene(tif, work_dir / tif.stem, source_gsd=SOURCE_GSD, zooms=zooms)
         chips += [_Chip(tif.stem, parse_oam_name(p), p) for z in sorted(tiled) for p in tiled[z]]
 
     near = near_footprints([c.xyz for c in chips], list(footprints.values()), eval_buffer_m)
     kept = [c for c, is_near in zip(chips, near, strict=True) if not is_near]
 
+    # the rasters (0.1-0.6 km) are smaller than the buffer, so a block split would drop most of train
+    sides = group_split(
+        [c.xyz for c in kept], [c.scene for c in kept], val_ratio=val_ratio, seed=seed, buffer_m=buffer_m
+    )
     by_region: dict[tuple[str, str], list[_Chip]] = {}
     dropped = 0
-    for site in sorted({scenes[c.scene].site for c in kept}):
-        group = [c for c in kept if scenes[c.scene].site == site]
-        sides = block_split(
-            [c.xyz for c in group], block_size=block_size, val_ratio=val_ratio, seed=seed, buffer_m=buffer_m
-        )
-        for chip, side in zip(group, sides, strict=True):
-            if side == "drop":
-                dropped += 1
-            else:
-                by_region.setdefault((chip.scene, side), []).append(chip)
+    for chip, side in zip(kept, sides, strict=True):
+        if side == "drop":
+            dropped += 1
+        else:
+            by_region.setdefault((chip.scene, side), []).append(chip)
 
     counts = {str(z): dict.fromkeys(_SPLITS, 0) for z in zooms}
     invalid_shares: list[float] = []
@@ -227,6 +224,7 @@ def convert(
         "dropped_by_buffer": dropped,
         "masked_pct": round(float(np.mean(invalid_shares)) * 100, 1) if invalid_shares else 0.0,
         "skipped_no_crs": skipped_no_crs,
+        "val_scenes": sorted(stem for stem, split in by_region if split == "val"),
         "val_share": counts[str(finest)]["val"] / total if total else 0.0,
     }
     out_root.mkdir(parents=True, exist_ok=True)

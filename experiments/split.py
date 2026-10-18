@@ -1,4 +1,5 @@
-"""The block split with a buffer, for contiguous scenes only.
+"""Train/val splits with a buffer: the block split for contiguous scenes, the group split for scenes smaller
+than the buffer.
 
 Official splits are used where a dataset has one.
 """
@@ -12,6 +13,8 @@ from experiments.leakage import box_distance_m, tile_boxes_3857
 from fair_trees.dataset import block_key
 
 logger = logging.getLogger(__name__)
+
+MAX_GROUPS = 16  # group_split tries every subset of groups
 
 
 def block_split(
@@ -59,6 +62,83 @@ def block_split(
         for i in idx:
             sides[i] = side
 
+    return _drop_near_held(tiles, sides, buffer_m)
+
+
+def group_split(
+    tiles: Sequence[tuple[int, int, int]],
+    scenes: Sequence[str],
+    *,
+    val_ratio: float,
+    seed: int,
+    z_ref: int = 19,
+    buffer_m: float = 1000.0,
+) -> list[str]:
+    """Per tile, one of ``"train"``, ``"val"`` or ``"drop"``, keeping groups of nearby scenes whole.
+
+    For scenes smaller than the buffer, where any block split leaves most of train within ``buffer_m`` of
+    val. Scenes closer than ``buffer_m`` form one group; val is the proper subset of groups whose ground
+    area (distinct ``z_ref`` tiles) is closest to ``val_ratio``. Groups lie at least ``buffer_m`` apart, so
+    the buffer, still applied, drops nothing.
+    """
+    if not 0 < val_ratio < 1:
+        raise ValueError(f"need 0 < val_ratio < 1, got {val_ratio}")
+    if len(scenes) != len(tiles):
+        raise ValueError(f"{len(tiles)} tiles but {len(scenes)} scene names")
+    if not len(tiles):
+        return []
+
+    names = sorted(set(scenes))
+    scene_of = np.array([names.index(s) for s in scenes])
+    boxes = tile_boxes_3857(tiles)
+    extents = np.array(
+        [
+            [*boxes[scene_of == i, :2].min(axis=0), *boxes[scene_of == i, 2:].max(axis=0)]
+            for i in range(len(names))
+        ]
+    )
+    close = box_distance_m(extents, extents) < buffer_m
+    close |= close.T  # the gap is scaled at the first box's latitude, so make it symmetric
+    group = [-1] * len(names)
+    n_groups = 0
+    for start in range(len(names)):
+        if group[start] >= 0:
+            continue
+        group[start] = n_groups
+        stack = [start]
+        while stack:
+            for j in np.flatnonzero(close[stack.pop()]):
+                if group[j] < 0:
+                    group[j] = n_groups
+                    stack.append(j)
+        n_groups += 1
+    tile_group = [group[i] for i in scene_of]
+    if n_groups == 1:
+        logger.warning(
+            "all %d scenes lie within %.0f m of each other: one group, no val", len(names), buffer_m
+        )
+        return ["train"] * len(tiles)
+    if n_groups > MAX_GROUPS:
+        raise ValueError(f"{n_groups} scene groups; the exact val search handles at most {MAX_GROUPS}")
+
+    area = np.zeros(n_groups)
+    for g, _ in {(g, block_key(x, y, z, z_ref, 1)) for g, (x, y, z) in zip(tile_group, tiles, strict=True)}:
+        area[g] += 1
+    order = np.random.default_rng(seed).permutation(n_groups)  # breaks ties between equally close subsets
+    masks = np.arange(1, 2**n_groups - 1)  # every proper, non-empty subset
+    bits = ((masks[:, None] >> np.arange(n_groups)) & 1).astype(np.uint8)
+    share = bits @ area[order] / area.sum()
+    best = int(np.argmin(np.abs(share - val_ratio)))
+    val_groups = {int(order[b]) for b in np.flatnonzero(bits[best])}
+    held = [names[i] for i in range(len(names)) if group[i] in val_groups]
+    logger.info("group split: %d groups, val area share %.3f, val scenes %s", n_groups, share[best], held)
+
+    sides = ["val" if g in val_groups else "train" for g in tile_group]
+    return _drop_near_held(tiles, sides, buffer_m)
+
+
+def _drop_near_held(tiles: Sequence[tuple[int, int, int]], sides: list[str], buffer_m: float) -> list[str]:
+    """``sides`` with every train tile within ``buffer_m`` of a val or test tile set to ``"drop"``."""
     held = [i for i, s in enumerate(sides) if s != "train"]
     if buffer_m > 0 and held:
         train = [i for i, s in enumerate(sides) if s == "train"]

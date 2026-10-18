@@ -56,12 +56,20 @@ def test_voc_boxes(raw):
 
 
 def test_convert_writes_regions(raw, tmp_path):
-    out = tmp_path / "neon"
-    stats = convert(
-        raw, out, block_size=1, val_ratio=0.3, buffer_m=0.0, biome_fn=lambda lon, lat: "Test biome"
+    far = "2018_TEST_1_403000_3285000_image"  # 3 km east: its own group
+    _tif(raw / "training" / "RGB" / f"{far}.tif", 403000, 3285150, 1500)
+    _voc(
+        raw / "annotations" / f"{far}.xml",
+        [(100, 100, 200, 220), (700, 650, 760, 700), (1300, 50, 1400, 120)],
     )
+    out = tmp_path / "neon"
+    stats = convert(raw, out, val_ratio=0.3, biome_fn=lambda lon, lat: "Test biome")
     regions = load_regions(out)
-    assert {r.id for r in regions} == {f"{SCENE}-train", f"{SCENE}-val"}
+    assert {r.id.rsplit("-", 1)[0] for r in regions} == {SCENE, far}
+    assert sorted(r.split for r in regions) == ["train", "val"]  # one whole scene per side
+    assert stats["dropped_by_buffer"] == 0 and stats["val_scenes"] == [
+        r.id[:-4] for r in regions if r.split == "val"
+    ]
     for r in regions:
         assert (r.source, r.biome, r.licence) == ("neon", "Test biome", "CC-BY-4.0")
         assert sorted(r.chips) == [19, 20] and r.valid_area_m2 > 0 and r.footprint["type"] == "Polygon"
@@ -80,9 +88,7 @@ def test_convert_writes_regions(raw, tmp_path):
 def test_chips_near_eval_plots_are_excluded(raw, tmp_path):
     _tif(raw / "evaluation" / "RGB" / "TEST_002.tif", 400200, 3285100, 400)  # 50 m east of the training scene
     _voc(raw / "annotations" / "TEST_002.xml", [(10, 10, 50, 50)])
-    stats = convert(
-        raw, tmp_path / "neon", block_size=1, val_ratio=0.3, buffer_m=1000.0, biome_fn=lambda lon, lat: "x"
-    )
+    stats = convert(raw, tmp_path / "neon", val_ratio=0.3, buffer_m=1000.0, biome_fn=lambda lon, lat: "x")
     assert stats["excluded_near_eval_plots"] > 0
     assert not list((tmp_path / "neon").glob("*/z*/chips/*.tif"))
 
@@ -90,16 +96,16 @@ def test_chips_near_eval_plots_are_excluded(raw, tmp_path):
 def test_eval_plot_overlapping_the_scene_is_excluded_without_a_split_buffer(raw, tmp_path):
     _tif(raw / "evaluation" / "RGB" / "TEST_004.tif", 400050, 3285100, 200)  # inside the training scene
     _voc(raw / "annotations" / "TEST_004.xml", [(10, 10, 50, 50)])
-    stats = convert(raw, tmp_path / "neon", block_size=1, val_ratio=0.3, buffer_m=0.0)
+    stats = convert(raw, tmp_path / "neon", val_ratio=0.3, buffer_m=0.0)
     assert stats["excluded_near_eval_plots"] > 0
     assert not list((tmp_path / "neon").glob("*/z*/chips/*.tif"))
 
 
 def test_convert_refuses_a_non_empty_out_root(raw, tmp_path):
     out = tmp_path / "neon"
-    convert(raw, out, block_size=1, val_ratio=0.3)
+    convert(raw, out, val_ratio=0.3)
     with pytest.raises(ValueError, match="not empty"):
-        convert(raw, out, block_size=1, val_ratio=0.3, seed=7)
+        convert(raw, out, val_ratio=0.3, seed=7)
 
 
 def test_training_raster_without_crs_is_skipped(raw, tmp_path):
@@ -107,9 +113,9 @@ def test_training_raster_without_crs_is_skipped(raw, tmp_path):
     _tif(raw / "training" / "RGB" / f"{stem}.tif", 0, 0, 100, crs=None)
     _voc(raw / "annotations" / f"{stem}.xml", [(10, 10, 50, 50)])
     out = tmp_path / "neon"
-    stats = convert(raw, out, block_size=1, val_ratio=0.3, buffer_m=0.0)
+    stats = convert(raw, out, val_ratio=0.3, buffer_m=0.0)
     assert stats["skipped_no_crs"] == [f"{stem}.tif"]
-    assert {r.id for r in load_regions(out)} == {f"{SCENE}-train", f"{SCENE}-val"}
+    assert {r.id for r in load_regions(out)} == {f"{SCENE}-train"}  # one scene is one group: no val
 
 
 def test_eval_plot_without_crs_is_an_error(raw):
