@@ -89,6 +89,7 @@ def test_chips_near_eval_plots_are_excluded(raw, tmp_path):
 
 def test_eval_plot_overlapping_the_scene_is_excluded_without_a_split_buffer(raw, tmp_path):
     _tif(raw / "evaluation" / "RGB" / "TEST_004.tif", 400050, 3285100, 200)  # inside the training scene
+    _voc(raw / "annotations" / "TEST_004.xml", [(10, 10, 50, 50)])
     stats = convert(raw, tmp_path / "neon", block_size=1, val_ratio=0.3, buffer_m=0.0)
     assert stats["excluded_near_eval_plots"] > 0
     assert not list((tmp_path / "neon").glob("*/z*/chips/*.tif"))
@@ -113,8 +114,15 @@ def test_training_raster_without_crs_is_skipped(raw, tmp_path):
 
 def test_eval_plot_without_crs_is_an_error(raw):
     _tif(raw / "evaluation" / "RGB" / "TEST_003.tif", 0, 0, 100, crs=None)
+    _voc(raw / "annotations" / "TEST_003.xml", [(10, 10, 50, 50)])
     with pytest.raises(ValueError, match="CRS"):
         eval_plot_footprints(raw)
+
+
+def test_unannotated_plot_images_are_not_eval_plots(raw):
+    _tif(raw / "evaluation" / "RGB" / "TEST_005.tif", 0, 0, 100, crs=None)  # no annotation, no CRS
+    _tif(raw / "evaluation" / "RGB" / "TEST_006.tif", 400200, 3285100, 400)  # no annotation, by the scene
+    assert set(eval_plot_footprints(raw)) == {"TEST_001"}
 
 
 def test_resolve_biome_fn(tmp_path):

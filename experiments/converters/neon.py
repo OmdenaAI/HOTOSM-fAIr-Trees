@@ -71,9 +71,15 @@ def find_training_rasters(raw_root: Path) -> list[tuple[Path, Path]]:
 
 
 def eval_plot_footprints(raw_root: Path) -> dict[str, tuple[float, float, float, float]]:
-    """EPSG:4326 ``(west, south, east, north)`` per eval plot, keyed by plot name."""
+    """EPSG:4326 ``(west, south, east, north)`` per eval plot, keyed by plot name.
+
+    An eval plot is an ``evaluation/RGB`` image with an annotation, the same set the benchmark scores;
+    the archive's unannotated plot images are never scored, so they cannot leak and are ignored.
+    """
     footprints = {}
     for tif in sorted((Path(raw_root) / "evaluation" / "RGB").glob("*.tif")):
+        if not (Path(raw_root) / "annotations" / f"{tif.stem}.xml").is_file():
+            continue
         with rasterio.open(tif) as ds:
             if ds.crs is None:
                 raise ValueError(
