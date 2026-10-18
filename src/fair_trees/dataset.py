@@ -194,7 +194,7 @@ def load_regions(root: Path) -> list[Region]:
         for zdir in sorted(d.glob("z*")):
             if not zdir.is_dir():
                 continue
-            found = tuple(sorted((zdir / "chips").glob("OAM-*")))
+            found = tuple(p for p in sorted((zdir / "chips").glob("OAM-*")) if parse_oam_name(p))
             if found:
                 chips[int(zdir.name[1:])] = found
         ignore = d / "ignore.geojson"

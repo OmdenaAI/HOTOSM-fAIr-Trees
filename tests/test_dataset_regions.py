@@ -128,6 +128,14 @@ def test_load_regions_rejects_bad_metadata(write_region):
         load_regions(d.parent)
 
 
+def test_load_regions_ignores_sidecar_files(write_region):
+    d = write_region("a")
+    [chip] = (d / "z20" / "chips").glob("OAM-*.tif")
+    chip.with_name(chip.name + ".aux.xml").write_text("<PAMDataset/>")
+    [region] = load_regions(d.parent)
+    assert region.chips[20] == (chip,)
+
+
 def test_load_fair_dataset_groups_tiles(write_oam_chip, tmp_path, geo, caplog):
     chips = [write_oam_chip(X0, Y0), write_oam_chip(X0 + 1, Y0), write_oam_chip(X0 + 5, Y0)]
     (tmp_path / "photo.tif").write_bytes(chips[0].read_bytes())
