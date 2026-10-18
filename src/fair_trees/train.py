@@ -420,6 +420,11 @@ def train(
     s = _LoopState(patience_left=cfg.patience)
     last_path = None
     found = latest_checkpoint(out_dir) if resume else None
+    if resume and found is None and _checkpoints(out_dir):
+        # a fresh start here would be rotated away by the old, higher-numbered checkpoints
+        raise RuntimeError(
+            f"{out_dir}: no readable checkpoint; move the unreadable ckpt-*.pt aside or use a new out_dir"
+        )
     if found is not None:
         last_path, state = found
         check_resume(

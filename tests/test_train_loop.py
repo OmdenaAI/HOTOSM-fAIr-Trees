@@ -212,3 +212,15 @@ def test_forced_fresh_start_supersedes_the_old_run(monkeypatch, regions, weights
     assert "superseded-0" in caplog.text
     assert first.last_checkpoint.name in {p.name for p in out.glob("ckpt-*.pt")}  # the new run's own
     assert [h["val/f1_max"] for h in second.history] == [0.4, 0.5, 0.6]
+
+
+def test_resume_without_a_readable_checkpoint_is_refused(monkeypatch, regions, weights, tmp_path):
+    out = tmp_path / "run"
+    out.mkdir()
+    for name in (T.checkpoint_name(0, 2), T.checkpoint_name(1, 0)):
+        (out / name).write_bytes(b"not a checkpoint")
+    before = {p.name: p.read_bytes() for p in out.iterdir()}
+    script = Script([0.1] * 3)
+    with pytest.raises(RuntimeError, match="no readable checkpoint"):
+        _run(monkeypatch, script, regions, weights, out)
+    assert script.calls == 0 and {p.name: p.read_bytes() for p in out.iterdir()} == before
