@@ -1,5 +1,12 @@
 """Torch side: RetinaNet builder, numpy-facing run function, and the training-step pieces."""
 
+import dataclasses
+import hashlib
+import json
+import logging
+import os
+import re
+import shutil
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
@@ -19,6 +26,10 @@ from fair_trees.dataset import Region, RegionCache, SampleSpec, load_sample
 from fair_trees.params import TrainParams
 from fair_trees.preprocess import preprocess_window
 from fair_trees.serve import RunFn
+
+logger = logging.getLogger(__name__)
+
+CKPT_PATTERN = re.compile(r"^ckpt-e(\d{3})-s(\d{6})\.pt$")
 
 
 def build_model(weights: Path | None, *, trainable_layers: int) -> RetinaNet:
@@ -161,3 +172,83 @@ def forward_loss(
     head_outputs = model.head(features)
     anchors = model.anchor_generator(ImageList(images, image_sizes), features)
     return model.compute_loss(targets, head_outputs, anchors)
+
+
+def checkpoint_name(epoch: int, step: int) -> str:
+    return f"ckpt-e{epoch:03d}-s{step:06d}.pt"
+
+
+def config_hash(cfg: TrainParams) -> str:
+    """sha256 of the canonical JSON of the config (zoom_weights keys as strings)."""
+    data = dataclasses.asdict(cfg)
+    data["zoom_weights"] = {str(k): v for k, v in data["zoom_weights"].items()}
+    return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()
+
+
+def state_hash(tensors: Mapping[str, torch.Tensor]) -> str:
+    """sha256 over the sorted tensor names and their raw bytes."""
+    h = hashlib.sha256()
+    for name in sorted(tensors):
+        h.update(name.encode())
+        h.update(tensors[name].detach().cpu().contiguous().numpy().tobytes())
+    return h.hexdigest()
+
+
+def _checkpoints(out_dir: Path) -> list[tuple[tuple[int, int], Path]]:
+    """Checkpoint files in `out_dir`, oldest first by (epoch, step)."""
+    found = []
+    for path in out_dir.iterdir() if out_dir.is_dir() else ():
+        m = CKPT_PATTERN.match(path.name)
+        if m:
+            found.append(((int(m.group(1)), int(m.group(2))), path))
+    return sorted(found)
+
+
+def save_file(obj, out_dir: Path, name: str, *, tmp_dir: Path, keep_last: int | None = None) -> Path:
+    """Save locally, copy to `<name>.part`, check the size, rename; rotate only after the rename."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    local = tmp_dir / name
+    part = out_dir / f"{name}.part"
+    try:
+        torch.save(obj, local)
+        size = local.stat().st_size
+        try:
+            shutil.copyfile(local, part)
+            if part.stat().st_size != size:
+                raise OSError(f"size mismatch copying {name}")
+            os.replace(part, out_dir / name)
+        except BaseException:
+            part.unlink(missing_ok=True)
+            raise
+    finally:
+        local.unlink(missing_ok=True)
+    if keep_last is not None:
+        for _, old in _checkpoints(out_dir)[: -keep_last or None]:
+            old.unlink()
+    return out_dir / name
+
+
+def latest_checkpoint(out_dir: Path) -> tuple[Path, dict] | None:
+    """Newest checkpoint that loads; unreadable ones are logged and skipped."""
+    for _, path in reversed(_checkpoints(out_dir)):
+        try:
+            return path, torch.load(path, map_location="cpu", weights_only=True)
+        except Exception as error:
+            logger.warning(f"{path.name}: unreadable checkpoint ({error}); trying the previous one")
+    return None
+
+
+def check_resume(
+    state: Mapping, *, config_hash: str, w0_hash: str, manifest_hash: str, repo_sha: str, force: bool
+) -> None:
+    """Refuse to resume against changed config, start weights or data unless `force`."""
+    if not force:
+        if state["config_hash"] != config_hash:
+            raise ValueError("config hash changed since the checkpoint; pass force=True to resume anyway")
+        if state["w0_hash"] != w0_hash:
+            raise ValueError("w0 hash changed: the start weights differ")
+        if state["manifest_hash"] != manifest_hash:
+            raise ValueError("manifest hash changed: the training data differ")
+    if state["repo_sha"] != repo_sha:
+        logger.warning(f"repo SHA changed since the checkpoint: {state['repo_sha']} -> {repo_sha}")
