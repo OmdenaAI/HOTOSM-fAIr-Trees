@@ -19,6 +19,7 @@ import rasterio.features
 from affine import Affine
 from pyproj import Transformer
 
+from fair_trees.augment import DOWNSCALE_P, colour_jitter, downscale, flip, rot90
 from fair_trees.georef import ORIGIN_SHIFT, mercator_y_to_lat, parse_oam_name, tile_bounds_3857, true_gsd
 from fair_trees.params import TrainParams
 from fair_trees.preprocess import Window, read_chip, tile_groups
@@ -602,6 +603,50 @@ def plan_epoch(
         drawn[source] += 1
         empties[source] += _is_empty(geom, _window(geom, centre, size_m))
     return specs
+
+
+def load_sample(spec: SampleSpec, cache: RegionCache, cfg: TrainParams) -> tuple[np.ndarray, np.ndarray]:
+    """One training crop: uint8 (n, n, 3) with masked pixels at 0, and float32 (K, 4) boxes in crop pixels.
+
+    A pure function of ``(spec, cfg)`` and the files on disk: all randomness comes from ``spec.aug_seed``.
+    The cache's arrays are only read, never written.
+    """
+    geom = cache.geom(spec.region_id, spec.zoom)
+    w = cache.crop_window(spec)
+    n = w.width
+    rgb = np.zeros((n, n, 3), np.uint8)
+    valid = np.zeros((n, n), bool)
+    tp = geom.tile_px
+    for r in range(w.y // tp, (w.y + n - 1) // tp + 1):
+        for c in range(w.x // tp, (w.x + n - 1) // tp + 1):
+            path = geom.tiles.get((geom.xmin + c, geom.ymin + r))
+            if path is None:
+                continue
+            chip_rgb, chip_valid = cache.chip(path)
+            x0, x1 = max(w.x, c * tp), min(w.x + n, (c + 1) * tp)
+            y0, y1 = max(w.y, r * tp), min(w.y + n, (r + 1) * tp)
+            src = (slice(y0 - r * tp, y1 - r * tp), slice(x0 - c * tp, x1 - c * tp))
+            dst = (slice(y0 - w.y, y1 - w.y), slice(x0 - w.x, x1 - w.x))
+            rgb[dst] = chip_rgb[src]
+            valid[dst] = chip_valid[src]
+
+    crop_t = geom.transform_3857 @ Affine.translation(w.x, w.y)
+    masked = ~valid | rasterize_mask(cache.region(spec.region_id), crop_t, (n, n))
+    boxes = boxes_in_window(geom.boxes, ~masked, w.x, w.y, n, n)
+
+    rng = np.random.default_rng(spec.aug_seed)
+    aug = cfg.augment
+    if aug.downscale and rng.random() < DOWNSCALE_P:
+        rgb = downscale(rgb, rng)
+    for enabled, transform in ((aug.flips, flip), (aug.rot90, rot90)):
+        if enabled:
+            stack, boxes = transform(np.dstack([rgb, masked.astype(np.uint8)]), boxes, rng)
+            rgb, masked = stack[..., :3], stack[..., 3].astype(bool)
+    if aug.colour_jitter:
+        rgb = colour_jitter(np.ascontiguousarray(rgb), rng)
+    rgb = np.array(rgb)  # contiguous and writable
+    rgb[masked] = 0  # after jitter, so masked pixels stay exactly 0
+    return rgb, boxes.astype(np.float32)
 
 
 def sampler_stats(specs: Sequence[SampleSpec], cache: RegionCache) -> dict[str, float]:
