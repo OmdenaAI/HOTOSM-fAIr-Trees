@@ -108,6 +108,35 @@ def test_main_writes_run_files_and_calls_train(monkeypatch, setup, tmp_path):
     assert json.loads((drive / "runs" / "r2" / "config.json").read_text())["parsed"]["learning_rate"] == 0.002
 
 
+def _refused_then_forced(config, run_id, kw, match):
+    """Rerun `run_id` after a change: refused with no file touched, then accepted with force=True."""
+    out = kw["drive_root"] / "runs" / run_id
+    before = {name: (out / name).read_bytes() for name in ("config.json", "env.json")}
+    with pytest.raises(ValueError, match=f"{match}.*force=True"):
+        run.main(config, run_id, **kw)
+    assert {name: (out / name).read_bytes() for name in before} == before
+    run.main(config, run_id, force=True, **kw)
+    return json.loads((out / "config.json").read_text()), json.loads((out / "env.json").read_text())
+
+
+def test_main_refuses_changed_hyperparameters_unless_forced(setup, tmp_path):
+    data, drive, config, _ = setup
+    kw = dict(drive_root=drive, data_root=data, tmp_dir=tmp_path / "tmp")
+    run.main(config, "r1", **kw)  # an unchanged rerun resumes
+    config.write_text(CONFIG.replace("lr: 0.002", "lr: 0.003"))
+    conf, _ = _refused_then_forced(config, "r1", kw, "hyperparameters")
+    assert conf["parsed"]["learning_rate"] == 0.003
+
+
+def test_main_refuses_changed_manifests_unless_forced(setup, tmp_path):
+    data, drive, config, _ = setup
+    kw = dict(drive_root=drive, data_root=data, tmp_dir=tmp_path / "tmp")
+    old = json.loads((drive / "runs" / "r1" / "env.json").read_text())["manifests"]
+    (data / "neon" / "manifest.json").write_text('{"source": "neon", "restaged": true}\n')
+    _, env = _refused_then_forced(config, "r1", kw, "manifests")
+    assert env["manifests"] != old
+
+
 def test_evaluate_writes_parts(monkeypatch, setup, fake_session):
     data, drive, _, bench = setup
     monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
@@ -169,3 +198,11 @@ def test_compare_runs(tmp_path):
     assert r["paired_diff"][0] == 0.0
     _fake_run(tmp_path, "c", [("p0", "s0"), ("p1", "sX")], counts)
     assert run.compare_runs("a", "c", drive_root=tmp_path)["sample_ids_equal"] is False
+
+
+def test_compare_runs_without_common_epochs_compares_nothing(tmp_path):
+    counts = [(8, 2, 1), (5, 1, 2)]
+    _fake_run(tmp_path, "a", [("p0", "s0")], counts)
+    _fake_run(tmp_path, "b", [], counts)
+    r = run.compare_runs("a", "b", drive_root=tmp_path)
+    assert r["plan_equal"] is None and r["sample_ids_equal"] is None

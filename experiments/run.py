@@ -109,6 +109,20 @@ def _write_json(path: Path, obj) -> None:
     path.write_text(json.dumps(obj, indent=2, allow_nan=False) + "\n")
 
 
+def _refuse_changed_run(config_path: Path, env: Mapping, parsed: Mapping, manifests: Mapping) -> None:
+    """Raise before anything is written when an existing run was made with other params or data."""
+    changed = []
+    if config_path.exists() and json.loads(config_path.read_text())["parsed"] != parsed:
+        changed.append("the parsed hyperparameters")
+    if "manifests" in env and env["manifests"] != manifests:
+        changed.append("the data manifests")
+    if changed:
+        raise ValueError(
+            f"{config_path.parent}: {' and '.join(changed)} differ from the existing run; "
+            "pass force=True to start it over"
+        )
+
+
 def main(
     config: Path,
     run_id: str,
@@ -119,7 +133,11 @@ def main(
     num_workers: int = 2,
     force: bool = False,
 ) -> "TrainResult":
-    """Train (or resume) run ``run_id`` from ``config``; writes ``config.json`` and ``env.json`` first."""
+    """Train (or resume) run ``run_id`` from ``config``; writes ``config.json`` and ``env.json`` first.
+
+    An existing run whose parsed hyperparameters or data manifests differ is refused before any file is
+    written, unless ``force``.
+    """
     import torch
     import torchvision
 
@@ -129,13 +147,17 @@ def main(
 
     conf = load_config(config)
     cfg = parse_train_params(conf["hyperparameters"])
+    # round-tripped through json (int `zoom_weights` keys become strings) to compare with config.json
+    parsed = json.loads(json.dumps(dataclasses.asdict(cfg)))
+    manifests = _manifests(conf, data_root)
     out_dir = Path(drive_root) / "runs" / run_id
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # json writes the int keys of `zoom_weights` as strings
-    _write_json(out_dir / "config.json", {"config": conf, "parsed": dataclasses.asdict(cfg)})
-
-    env_path = out_dir / "env.json"
+    config_path, env_path = out_dir / "config.json", out_dir / "env.json"
     env = json.loads(env_path.read_text()) if env_path.exists() else {}
+    if not force:
+        _refuse_changed_run(config_path, env, parsed, manifests)
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(config_path, {"config": conf, "parsed": parsed})
     sha = repo_sha()
     _write_json(
         env_path,
@@ -148,7 +170,7 @@ def main(
             "torchvision": torchvision.__version__,
             "cuda": torch.version.cuda,
             "gpu": torch.cuda.get_device_name() if torch.cuda.is_available() else "cpu",
-            "manifests": _manifests(conf, data_root),
+            "manifests": manifests,
         },
     )
 
@@ -309,7 +331,8 @@ def _unit_counts(part: Mapping) -> dict:
 
 
 def _equal_over(a: Mapping | None, b: Mapping | None, epochs: Sequence[str], column: int) -> bool | None:
-    if a is None or b is None:
+    """Digest equality over ``epochs``; None without a metrics.csv on either side or a common epoch."""
+    if a is None or b is None or not epochs:
         return None
     return all(a[e][column] == b[e][column] for e in epochs)
 
