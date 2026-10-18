@@ -101,6 +101,16 @@ def test_convert_refuses_a_non_empty_out_root(raw, tmp_path):
         convert(raw, out, block_size=1, val_ratio=0.3, seed=7)
 
 
+def test_training_raster_without_crs_is_skipped(raw, tmp_path):
+    stem = "2019_NOCR_5_452000_3113000_image_crop"
+    _tif(raw / "training" / "RGB" / f"{stem}.tif", 0, 0, 100, crs=None)
+    _voc(raw / "annotations" / f"{stem}.xml", [(10, 10, 50, 50)])
+    out = tmp_path / "neon"
+    stats = convert(raw, out, block_size=1, val_ratio=0.3, buffer_m=0.0)
+    assert stats["skipped_no_crs"] == [f"{stem}.tif"]
+    assert {r.id for r in load_regions(out)} == {f"{SCENE}-train", f"{SCENE}-val"}
+
+
 def test_eval_plot_without_crs_is_an_error(raw):
     _tif(raw / "evaluation" / "RGB" / "TEST_003.tif", 0, 0, 100, crs=None)
     with pytest.raises(ValueError, match="CRS"):

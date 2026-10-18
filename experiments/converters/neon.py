@@ -95,8 +95,6 @@ def _box_polygon(box: Sequence[float], affine: Affine) -> dict:
 
 def _read_scene(tif: Path, xml: Path, site: str, biome_fn: Callable[[float, float], str] | None) -> _Scene:
     with rasterio.open(tif) as ds:
-        if ds.crs is None:
-            raise ValueError(f"{tif.name}: training raster has no CRS")
         polygons = [_box_polygon(box, ds.transform) for box in voc_boxes(xml)]
         polygons.append(_box_polygon((0, 0, ds.width, ds.height), ds.transform))
         *labels, footprint = transform_geom(ds.crs, "EPSG:4326", polygons)
@@ -170,10 +168,19 @@ def convert(
 
     scenes: dict[str, _Scene] = {}
     chips: list[_Chip] = []
+    skipped_no_crs = []
     for tif, xml in find_training_rasters(raw_root):
         match = _SITE.search(tif.stem)
         if match is None:
             logger.warning("%s: no NEON site code in the name, skipped", tif.name)
+            continue
+        with rasterio.open(tif) as ds:
+            has_crs = ds.crs is not None
+        if not has_crs:
+            # the name gives the NEON tile corner, not a crop's offset, so the raster cannot be placed
+            # (or kept away from the eval plots) without guessing
+            logger.warning("%s: training raster has no CRS, skipped", tif.name)
+            skipped_no_crs.append(tif.name)
             continue
         scenes[tif.stem] = _read_scene(tif, xml, match.group(1), biome_fn)
         tiled = tile_scene(tif, work_dir / tif.stem, source_gsd=SOURCE_GSD, zooms=zooms)
@@ -213,6 +220,7 @@ def convert(
         "excluded_near_eval_plots": int(near.sum()),
         "dropped_by_buffer": dropped,
         "masked_pct": round(float(np.mean(invalid_shares)) * 100, 1) if invalid_shares else 0.0,
+        "skipped_no_crs": skipped_no_crs,
         "val_share": counts[str(finest)]["val"] / total if total else 0.0,
     }
     out_root.mkdir(parents=True, exist_ok=True)
