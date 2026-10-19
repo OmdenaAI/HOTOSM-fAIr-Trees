@@ -7,7 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from rasterio.enums import Resampling
+from rasterio.enums import MaskFlags, Resampling
 from rasterio.transform import Affine, from_bounds
 from rasterio.warp import reproject, transform_bounds
 
@@ -101,6 +101,9 @@ def tile_scene(
         _, south, _, north = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
         rgb_src = src.read([1, 2, 3])
         mask_src = src.dataset_mask()[None]
+        if all(flags == [MaskFlags.all_valid] for flags in src.mask_flag_enums):
+            # no nodata value, mask or alpha: black collars come through as (0, 0, 0) pixels
+            mask_src = np.where(rgb_src.max(axis=0) > 0, 255, 0).astype(np.uint8)[None]
         for z in zooms_for(source_gsd, (south + north) / 2, zooms):
             xmin, ymin, xmax, ymax = tile_range(bounds, z)
             for y in range(ymin, ymax + 1):

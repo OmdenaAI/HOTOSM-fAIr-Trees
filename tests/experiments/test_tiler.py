@@ -64,6 +64,19 @@ def test_nodata_survives_jpeg(scene, tmp_path):
         assert not valid.all() and (rgb[~valid] == 0).all()
 
 
+def test_black_collar_without_nodata_is_masked(scene, tmp_path):
+    with rasterio.open(scene) as src:
+        profile, data = src.profile | {"nodata": None}, src.read()
+    bare = tmp_path / "bare.tif"  # the same west-third black collar, but no nodata value or mask
+    with rasterio.open(bare, "w", **profile) as dst:
+        dst.write(data)
+    with_nodata = tile_scene(scene, tmp_path / "a", source_gsd=0.1)
+    without = tile_scene(bare, tmp_path / "b", source_gsd=0.1)
+    assert [p.name for p in without[20]] == [p.name for p in with_nodata[20]]
+    for a, b in zip(with_nodata[20], without[20], strict=True):
+        np.testing.assert_array_equal(read_chip(a, use_sidecar=False)[1], read_chip(b, use_sidecar=False)[1])
+
+
 def test_tile_scene_is_deterministic(scene, tmp_path):
     a = tile_scene(scene, tmp_path / "a", source_gsd=0.1)
     b = tile_scene(scene, tmp_path / "b", source_gsd=0.1)

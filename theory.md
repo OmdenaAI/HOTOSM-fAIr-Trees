@@ -83,6 +83,9 @@ Tags: [V] verified (source code, checkpoint, dataset card, paper, or arithmetic 
 - Chips are 256 px JPEG GeoTIFFs in EPSG:3857 aligned to the XYZ grid, named OAM-x-y-z.tif. JPEG cannot
   hold exact zeros, so nodata travels in an internal GDAL mask that read_chip honours [P].
 - Chips more than 80% nodata are dropped [P].
+- A source with no nodata value, mask or alpha treats pure-black (0, 0, 0) pixels as nodata [P]: NEON's
+  `2019_SJER_4_251000_4103000_image` has a black collar stored as pixels, which made 491 of its 1,403
+  chips mostly black yet valid [V: Colab check, 2026-10-19].
 - NEON: group split with a 1 km buffer. Training rasters closer than 1 km form one group, and val is the
   set of whole groups whose z19 ground area is closest to 15%, so train and val lie at least 1 km apart
   and the buffer drops nothing [P]. Every chip within 1 km of an annotated NeonTreeEvaluation eval plot is
