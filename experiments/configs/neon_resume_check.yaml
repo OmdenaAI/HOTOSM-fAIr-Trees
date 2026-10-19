@@ -7,8 +7,8 @@ hyperparameters:
   epochs: 2
   patience: 3
   batch_size: 4
-  samples_per_epoch: 400
-  ckpt_every_min: 0.5
+  samples_per_epoch: 6000         # ~3.5 min per epoch on an L4 (~28 samples/s), long enough to kill by hand
+  ckpt_every_min: 1.0             # a few mid-epoch checkpoints per epoch to resume from
   amp: true
   seed: 7
 val:
