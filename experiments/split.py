@@ -11,6 +11,7 @@ import numpy as np
 
 from experiments.leakage import box_distance_m, tile_boxes_3857
 from fair_trees.dataset import block_key
+from fair_trees.georef import tile_bounds_4326, true_gsd
 
 logger = logging.getLogger(__name__)
 
@@ -77,9 +78,9 @@ def group_split(
     """Per tile, one of ``"train"``, ``"val"`` or ``"drop"``, keeping groups of nearby scenes whole.
 
     For scenes smaller than the buffer, where any block split leaves most of train within ``buffer_m`` of
-    val. Scenes closer than ``buffer_m`` form one group; val is the proper subset of groups whose ground
-    area (distinct ``z_ref`` tiles) is closest to ``val_ratio``. Groups lie at least ``buffer_m`` apart, so
-    the buffer, still applied, drops nothing.
+    val. Scenes closer than ``buffer_m`` form one group; val is the proper subset of groups whose share of
+    the ground area (covered by distinct ``z_ref`` tiles) is closest to ``val_ratio``. Groups lie at least
+    ``buffer_m`` apart, so the buffer, still applied, drops nothing.
     """
     if not 0 < val_ratio < 1:
         raise ValueError(f"need 0 < val_ratio < 1, got {val_ratio}")
@@ -121,9 +122,12 @@ def group_split(
     if n_groups > MAX_GROUPS:
         raise ValueError(f"{n_groups} scene groups; the exact val search handles at most {MAX_GROUPS}")
 
+    # ground area, not a tile count: a z_ref tile at 68 degrees covers 13% of one at the equator
     area = np.zeros(n_groups)
-    for g, _ in {(g, block_key(x, y, z, z_ref, 1)) for g, (x, y, z) in zip(tile_group, tiles, strict=True)}:
-        area[g] += 1
+    covered = {(g, block_key(x, y, z, z_ref, 1)) for g, (x, y, z) in zip(tile_group, tiles, strict=True)}
+    for g, (x, y) in covered:
+        _, south, _, north = tile_bounds_4326(x, y, z_ref)
+        area[g] += (256 * true_gsd(z_ref, (south + north) / 2)) ** 2
     order = np.random.default_rng(seed).permutation(n_groups)  # breaks ties between equally close subsets
     masks = np.arange(1, 2**n_groups - 1)  # every proper, non-empty subset
     bits = ((masks[:, None] >> np.arange(n_groups)) & 1).astype(np.uint8)

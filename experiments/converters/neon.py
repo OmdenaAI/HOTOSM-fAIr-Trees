@@ -115,7 +115,10 @@ def _write_json(path: Path, obj: dict) -> None:
 
 
 def _write_region(out_root: Path, stem: str, split: str, scene: _Scene, chips: list[_Chip]) -> list[float]:
-    """Move the chips into the region folder and write its files; returns each chip's invalid share."""
+    """Move the chips into the region folder and write its files.
+
+    Returns each chip's invalid share and the region's valid ground area in m^2.
+    """
     region_id = f"{stem}-{split}"
     region_dir = out_root / region_id
     lowest = min(c.xyz[2] for c in chips)
@@ -146,7 +149,7 @@ def _write_region(out_root: Path, stem: str, split: str, scene: _Scene, chips: l
         "valid_area_m2": valid_area_m2,
     }
     _write_json(region_dir / "region.json", meta)
-    return invalid_shares
+    return invalid_shares, valid_area_m2
 
 
 def convert(
@@ -207,16 +210,18 @@ def convert(
 
     counts = {str(z): dict.fromkeys(_SPLITS, 0) for z in zooms}
     invalid_shares: list[float] = []
+    area_m2 = dict.fromkeys(_SPLITS, 0.0)
     for (stem, split), group in sorted(by_region.items()):
-        invalid_shares += _write_region(out_root, stem, split, scenes[stem], group)
+        shares, valid_area_m2 = _write_region(out_root, stem, split, scenes[stem], group)
+        invalid_shares += shares
+        area_m2[split] += valid_area_m2
         for chip in group:
             counts[str(chip.xyz[2])][split] += 1
     for stem in scenes:
         if (work_dir / stem).exists():
             shutil.rmtree(work_dir / stem)  # only excluded and dropped chips are left
 
-    finest = max((z for z in zooms if sum(counts[str(z)].values())), default=None)
-    total = sum(counts[str(finest)].values()) if finest is not None else 0
+    total_m2 = sum(area_m2.values())
     stats = {
         "chips": counts,
         "boxes": sum(len(scenes[stem].labels) for stem in {stem for stem, _ in by_region}),
@@ -225,7 +230,8 @@ def convert(
         "masked_pct": round(float(np.mean(invalid_shares)) * 100, 1) if invalid_shares else 0.0,
         "skipped_no_crs": skipped_no_crs,
         "val_scenes": sorted(stem for stem, split in by_region if split == "val"),
-        "val_share": counts[str(finest)]["val"] / total if total else 0.0,
+        # share of the valid ground area; chip counts mislead when a zoom exists only at some latitudes
+        "val_share": area_m2["val"] / total_m2 if total_m2 else 0.0,
     }
     out_root.mkdir(parents=True, exist_ok=True)
     (out_root / "stats.json").write_text(json.dumps(stats, indent=2, sort_keys=True))

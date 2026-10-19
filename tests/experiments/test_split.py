@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import pytest
 
@@ -107,3 +109,16 @@ def test_group_split_no_tiles():
 def test_group_split_bad_arguments(val_ratio, scenes):
     with pytest.raises(ValueError):
         group_split([(X0, Y0, 20)], scenes, val_ratio=val_ratio, seed=0)
+
+
+def test_group_split_weighs_groups_by_ground_area():
+    # 12 tiles at 60 degrees cover the ground of 3 at the equator: by area c alone is 15% of the total,
+    # while by tile count a (5 of 29) would be closest
+    y60 = int((1 - math.asinh(math.tan(math.radians(60))) / math.pi) / 2 * 2**19)
+    rows = {"a": (X0 // 2, Y0 // 2, 5), "c": (X0 // 2 + 300, y60, 12), "d": (X0 // 2 + 600, Y0 // 2, 12)}
+    tiles, scenes = [], []
+    for scene, (x0, y, n) in rows.items():
+        tiles += [(x, y, 19) for x in range(x0, x0 + n)]
+        scenes += [scene] * n
+    sides = group_split(tiles, scenes, val_ratio=0.15, seed=0)
+    assert {s for s, side in zip(scenes, sides, strict=True) if side == "val"} == {"c"}
