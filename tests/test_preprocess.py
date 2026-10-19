@@ -1,5 +1,6 @@
 import logging
 import shutil
+import tracemalloc
 from pathlib import Path
 
 import numpy as np
@@ -132,6 +133,32 @@ def test_mosaic_skips_bad_chips(write_oam_chip, tmp_path, caplog):
 def test_mosaic_mixed_tile_sizes_raise(write_oam_chip):
     with pytest.raises(ValueError, match="size"):
         mosaic_chips([write_oam_chip(X0, Y0), write_oam_chip(X0 + 1, Y0, size=512)])
+
+
+def test_sparse_diagonal_is_refused_before_allocating(write_oam_chip):
+    # 200 corner-touching tiles form one group whose bounding box would need ~10.5 GB from ~52 MB of chips
+    paths = [write_oam_chip(X0 + i, Y0 + i) for i in range(200)]
+    tracemalloc.start()
+    try:
+        with pytest.raises(ValueError, match="51200x51200"):
+            mosaic_chips(paths)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 200 * 2**20
+
+
+def test_separate_groups_share_one_pixel_budget(write_oam_chip):
+    # two 64-tile diagonals, each exactly at the limit on its own, are refused together
+    paths = [write_oam_chip(X0 + dx + i, Y0 + i) for dx in (0, 100) for i in range(64)]
+    tracemalloc.start()
+    try:
+        with pytest.raises(ValueError, match="pixel limit"):
+            mosaic_chips(paths)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < 200 * 2**20
 
 
 def test_array_mosaic_and_is_blank():

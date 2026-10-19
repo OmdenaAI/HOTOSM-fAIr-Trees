@@ -20,7 +20,7 @@ from fair_trees.georef import (
     tile_bounds_4326,
     true_gsd,
 )
-from fair_trees.params import IMAGE_MEAN, IMAGE_STD, MAX_SIZE, MIN_SIZE, SIZE_DIVISIBLE
+from fair_trees.params import IMAGE_MEAN, IMAGE_STD, MAX_MOSAIC_PIXELS, MAX_SIZE, MIN_SIZE, SIZE_DIVISIBLE
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +143,13 @@ def tile_groups(xyzs: Sequence[tuple[int, int, int]]) -> list[list[int]]:
     return [indices for _, indices in groups]
 
 
+def _mosaic_shape(tiles: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]) -> tuple[int, int]:
+    """(height, width) of a tile group's mosaic; the largest tile bounds a group of mixed sizes."""
+    t = max(rgb.shape[0] for rgb, _ in tiles.values())
+    xs, ys = [x for x, _ in tiles], [y for _, y in tiles]
+    return (max(ys) - min(ys) + 1) * t, (max(xs) - min(xs) + 1) * t
+
+
 def _build_mosaic(tiles: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]], z: int) -> Mosaic:
     xmin = min(x for x, _ in tiles)
     ymin = min(y for _, y in tiles)
@@ -188,12 +195,20 @@ def mosaic_chips(
             continue
         tiles[(x, y)] = (rgb, valid)
     keys = [(x, y, z) for z, tiles in by_zoom.items() for x, y in tiles]
-    return [
-        _build_mosaic(
-            {(keys[i][0], keys[i][1]): by_zoom[keys[i][2]][keys[i][:2]] for i in group}, keys[group[0]][2]
-        )
+    selected = [
+        (keys[group[0]][2], {keys[i][:2]: by_zoom[keys[i][2]][keys[i][:2]] for i in group})
         for group in tile_groups(keys)
     ]
+    shapes = [_mosaic_shape(tiles) for _, tiles in selected]
+    total = sum(h * w for h, w in shapes)
+    if total > MAX_MOSAIC_PIXELS:
+        h, w = max(shapes, key=lambda s: s[0] * s[1])
+        raise ValueError(
+            f"{sum(len(tiles) for _, tiles in selected)} tiles need {len(shapes)} mosaic(s) of "
+            f"{total} pixels (largest {w}x{h}), more than the {MAX_MOSAIC_PIXELS} pixel limit; "
+            "send fewer or more compact tiles"
+        )
+    return [_build_mosaic(tiles, z) for z, tiles in selected]
 
 
 def array_mosaic(rgb: np.ndarray, gsd_m: float, valid: np.ndarray | None = None) -> Mosaic:
