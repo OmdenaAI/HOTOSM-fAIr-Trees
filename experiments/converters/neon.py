@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 SOURCE = "neon"
 SOURCE_GSD = 0.1
-LICENCE = "CC-BY-4.0"  # [?]
+LICENCE = "CC-BY-4.0"  # as stated on Zenodo record 5914554 [V]
 _SPLITS = ("train", "val")
 _SITE = re.compile(r"_([A-Z]{4})_")
 
