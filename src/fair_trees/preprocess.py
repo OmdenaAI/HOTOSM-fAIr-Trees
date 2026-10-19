@@ -20,7 +20,7 @@ from fair_trees.georef import (
     tile_bounds_4326,
     true_gsd,
 )
-from fair_trees.params import IMAGE_MEAN, IMAGE_STD, MAX_SIZE, MIN_SIZE, SIZE_DIVISIBLE
+from fair_trees.params import IMAGE_MEAN, IMAGE_STD, MAX_MOSAIC_PIXELS, MAX_SIZE, MIN_SIZE, SIZE_DIVISIBLE
 
 logger = logging.getLogger(__name__)
 
@@ -134,6 +134,13 @@ def _components(coords: Sequence[tuple[int, int]]) -> list[list[tuple[int, int]]
     return groups
 
 
+def _mosaic_shape(tiles: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]]) -> tuple[int, int]:
+    """(height, width) of a tile group's mosaic; the largest tile bounds a group of mixed sizes."""
+    t = max(rgb.shape[0] for rgb, _ in tiles.values())
+    xs, ys = [x for x, _ in tiles], [y for _, y in tiles]
+    return (max(ys) - min(ys) + 1) * t, (max(xs) - min(xs) + 1) * t
+
+
 def _build_mosaic(tiles: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]], z: int) -> Mosaic:
     xmin = min(x for x, _ in tiles)
     ymin = min(y for _, y in tiles)
@@ -184,7 +191,17 @@ def mosaic_chips(
         for group in _components(list(tiles))
     ]
     groups.sort(key=lambda item: item[:3])
-    return [_build_mosaic({k: by_zoom[z][k] for k in group}, z) for z, _, _, group in groups]
+    selected = [(z, {k: by_zoom[z][k] for k in group}) for z, _, _, group in groups]
+    shapes = [_mosaic_shape(tiles) for _, tiles in selected]
+    total = sum(h * w for h, w in shapes)
+    if total > MAX_MOSAIC_PIXELS:
+        h, w = max(shapes, key=lambda s: s[0] * s[1])
+        raise ValueError(
+            f"{sum(len(tiles) for _, tiles in selected)} tiles need {len(shapes)} mosaic(s) of "
+            f"{total} pixels (largest {w}x{h}), more than the {MAX_MOSAIC_PIXELS} pixel limit; "
+            "send fewer or more compact tiles"
+        )
+    return [_build_mosaic(tiles, z) for z, tiles in selected]
 
 
 def array_mosaic(rgb: np.ndarray, gsd_m: float, valid: np.ndarray | None = None) -> Mosaic:
