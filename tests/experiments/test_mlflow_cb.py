@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 from types import SimpleNamespace
 
@@ -10,7 +11,7 @@ class FakeMlflow:
         self.log = []
 
     def set_tracking_uri(self, uri):
-        self.log.append(("uri", uri))
+        self.log.append(("uri", uri, os.environ.get("MLFLOW_ALLOW_FILE_STORE")))
 
     def set_experiment(self, name):
         self.log.append(("experiment", name))
@@ -51,3 +52,14 @@ def test_mlflow_callback_resumes_the_same_run(monkeypatch, tmp_path):
     assert [e for e in fake.log if e[0] == "params"] == [("params", {"run_id": "r1", "hp.lr": "0.001"})]
     assert ("metrics", 1, {"val/f1_max": 0.6}) in fake.log
     assert fake.log.count(("end",)) == 2
+
+
+def test_mlflow_callback_allows_the_file_store(monkeypatch, tmp_path):
+    fake = FakeMlflow()
+    monkeypatch.setitem(sys.modules, "mlflow", fake)
+    monkeypatch.delenv("MLFLOW_ALLOW_FILE_STORE", raising=False)
+    env = tmp_path / "env.json"
+    env.write_text("{}")
+    make_mlflow_callback(tmp_path / "mlruns", "fair_trees", env, {"run_id": "r1"})({"val/f1_max": 0.5}, 0)
+    # set before the tracking store is opened
+    assert fake.log[0] == ("uri", (tmp_path / "mlruns").resolve().as_uri(), "true")

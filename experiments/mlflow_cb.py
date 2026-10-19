@@ -6,6 +6,7 @@ run. Each call opens and closes the run, so a runtime killed between epochs leav
 
 import json
 import logging
+import os
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -34,6 +35,9 @@ def make_mlflow_callback(
     def callback(metrics: dict, epoch: int) -> None:
         import mlflow
 
+        # newer MLflow (3.17.1 on Colab) refuses a file store unless this opts in; a folder on Drive
+        # needs no database, and SQLite on the Drive mount risks locking errors
+        os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
         mlflow.set_tracking_uri(Path(tracking_dir).resolve().as_uri())
         mlflow.set_experiment(experiment)
         env = json.loads(env_path.read_text())
