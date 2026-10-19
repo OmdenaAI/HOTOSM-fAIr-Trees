@@ -20,7 +20,7 @@ from fair_trees.georef import (
     tile_bounds_4326,
     true_gsd,
 )
-from fair_trees.params import IMAGE_MEAN, IMAGE_STD, MAX_SIZE, MIN_SIZE, SIZE_DIVISIBLE
+from fair_trees.params import IMAGE_MEAN, IMAGE_STD, MAX_MOSAIC_PIXELS, MAX_SIZE, MIN_SIZE, SIZE_DIVISIBLE
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +143,11 @@ def _build_mosaic(tiles: dict[tuple[int, int], tuple[np.ndarray, np.ndarray]], z
     t = next(iter(shapes))[0]
     height = (max(y for _, y in tiles) - ymin + 1) * t
     width = (max(x for x, _ in tiles) - xmin + 1) * t
+    if height * width > MAX_MOSAIC_PIXELS:
+        raise ValueError(
+            f"{len(tiles)} tiles at zoom {z} span a {width}x{height} mosaic, "
+            f"more than the {MAX_MOSAIC_PIXELS} pixel limit; send fewer or more compact tiles"
+        )
     rgb = np.zeros((height, width, 3), np.uint8)
     valid = np.zeros((height, width), bool)
     for (x, y), (chip_rgb, chip_valid) in tiles.items():
