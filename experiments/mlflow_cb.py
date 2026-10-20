@@ -7,12 +7,19 @@ run. Each call opens and closes the run, so a runtime killed between epochs leav
 import json
 import logging
 import os
+import re
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 MAX_PARAM_CHARS = 500
+_BAD_NAME_CHARS = re.compile(r"[^A-Za-z0-9_\-. :/]")  # MLflow accepts only these in metric and param names
+
+
+def _name(key: str) -> str:
+    """``key`` with each character MLflow rejects (e.g. the ``,`` and ``&`` in biome names) as ``_``."""
+    return _BAD_NAME_CHARS.sub("_", key)
 
 
 def _flatten(params: Mapping[str, object], prefix: str = "") -> dict[str, str]:
@@ -23,7 +30,7 @@ def _flatten(params: Mapping[str, object], prefix: str = "") -> dict[str, str]:
         if isinstance(value, Mapping):
             flat.update(_flatten(value, f"{name}."))
         else:
-            flat[name] = str(value)[:MAX_PARAM_CHARS]
+            flat[_name(name)] = str(value)[:MAX_PARAM_CHARS]
     return flat
 
 
@@ -38,6 +45,7 @@ def make_mlflow_callback(
         # newer MLflow (3.17.1 on Colab) refuses a file store unless this opts in; a folder on Drive
         # needs no database, and SQLite on the Drive mount risks locking errors
         os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
+        metrics = {_name(k): v for k, v in metrics.items()}
         mlflow.set_tracking_uri(Path(tracking_dir).resolve().as_uri())
         mlflow.set_experiment(experiment)
         env = json.loads(env_path.read_text())

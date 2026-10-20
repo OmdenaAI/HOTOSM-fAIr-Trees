@@ -63,3 +63,15 @@ def test_mlflow_callback_allows_the_file_store(monkeypatch, tmp_path):
     make_mlflow_callback(tmp_path / "mlruns", "fair_trees", env, {"run_id": "r1"})({"val/f1_max": 0.5}, 0)
     # set before the tracking store is opened
     assert fake.log[0] == ("uri", (tmp_path / "mlruns").resolve().as_uri(), "true")
+
+
+def test_mlflow_callback_replaces_characters_mlflow_rejects(monkeypatch, tmp_path):
+    fake = FakeMlflow()
+    monkeypatch.setitem(sys.modules, "mlflow", fake)
+    env = tmp_path / "env.json"
+    env.write_text("{}")
+    cb = make_mlflow_callback(tmp_path / "mlruns", "fair_trees", env, {"biome": {"A, B & C": 1}})
+    cb({"sampler/draws/biome/Mediterranean Forests, Woodlands & Scrub": 3, "val/f1_max": 0.5}, 0)
+    names = {"sampler/draws/biome/Mediterranean Forests_ Woodlands _ Scrub": 3, "val/f1_max": 0.5}
+    assert ("metrics", 0, names) in fake.log
+    assert ("params", {"biome.A_ B _ C": "1"}) in fake.log

@@ -1,5 +1,5 @@
 # Experiment-only tools. Never add these to pyproject.toml.
-mlflow
+mlflow==3.17.1
 huggingface_hub
 shapely
 geopandas
