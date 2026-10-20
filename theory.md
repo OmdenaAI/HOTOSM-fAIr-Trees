@@ -28,7 +28,7 @@ Tags: [V] verified (source code, checkpoint, dataset card, paper, or arithmetic 
 
 ## 5. Evaluation
 - Hungarian matching, IoU > 0.4; AP@0.4 over 101 confidence thresholds in [0.01, 1] [P].
-- Forgetting tolerance = release model's 95% CI on the NEON eval plots (recorded after the NEON reproduction run) [P].
+- Forgetting tolerance: release weights on 194 NEON eval plots, DeepForest-compatible mode: F1 = 0.663 [0.638, 0.685] (95% bootstrap over plots, 1,000 resamples, seed 0); a model passes if its NEON F1 >= 0.638 [V: experiments/results/neon-release/eval.json].
 
 ## 6. Weights and data provenance
 - `NEON.pt`: https://huggingface.co/weecology/deepforest-tree/resolve/main/NEON.pt, sha256 `6d2194194daa694ce99c3daff8d53a95722d5856337466263e9a1bd23f8d282a`, retrieved 2026-10-18 [V].
@@ -94,6 +94,26 @@ Tags: [V] verified (source code, checkpoint, dataset card, paper, or arithmetic 
   plots, DeepForest-compatible mode, is >= 0.638, the release model's lower 95% bound in
   `experiments/benchmark.json`. NEON val F1 is not compared with that bound (other images, zooms and inference
   settings); it is reported as a paired difference against the release model [P].
+- Throughput on a Colab L4 (torch 2.11.0+cu130, fp16 AMP): loader 16.4 / 30.1 / 56.3 samples/s with 0 / 2 / 4
+  workers, GPU step 28.0 samples/s at batch 4, ratio 2.01 (pass at >= 1.5). Training with 4 workers ran at
+  26.0-26.4 samples/s [V: experiments/results/neon-platform/throughput.json, metrics.csv].
+- Release weights on the L4: NEON F1 0.66248 against 0.66268 on CPU; one of 194 plots (BART_036_2019) gains
+  one box. Accepted as the same result: the GPU and CPU check is "F1 within 0.001", not "equal to 3
+  decimals" [V: experiments/results/release-baseline/eval.json, neon-release/eval.json]. The cause is likely
+  TF32 convolutions on the GPU [?].
+- Platform-regime fine-tune (trainable_layers 0, lr 0.001 cosine, patience 3, seed 42, 4,395 samples per
+  epoch): early-stopped after 9 of 10 epochs, best epoch 5 (counted from 0). NEON eval plots F1 0.653
+  [0.627, 0.678] >= 0.638, so the forgetting check passes. Val (9 regions, default inference settings): F1
+  0.658 against 0.665 for the release weights, paired difference -0.007 [-0.016, +0.023], no measurable
+  change [V: experiments/results/neon-platform/eval.json, release-baseline/eval.json].
+- Validation of the 9 NEON val regions took 142-380 s per epoch on the L4, longer than the 166 s of training
+  per epoch, and grew as training went on [V: experiments/results/neon-platform/metrics.csv]. It needs a cap
+  or a faster matcher before base training [P].
+- ONNX export of the fine-tuned model: max abs difference 4.3e-6 against PyTorch over 3 windows, pass
+  [V: experiments/results/neon-platform/export.json].
+- Resume: neon-resume-b was killed during epoch 1 after a mid-epoch checkpoint and resumed in a new runtime.
+  Its plan and sample-index digests equal neon-resume-a's for both epochs, and its losses, val F1 (0.641)
+  and NEON F1 (0.661) are identical to neon-resume-a's [V: experiments/results/neon-resume-a/, neon-resume-b/].
 
 ## 9. Sampling and crops
 - Source, then biome, then region, then zoom; source and biome probabilities follow n^alpha of valid area

@@ -18,6 +18,8 @@ sha256sum weights/NEON.pt tests/data_local/OSBS_029.tif
 
 NeonTreeEvaluation layout matches the loader defaults (`evaluation/RGB/<PLOT>.tif`, `annotations/<PLOT>.xml`, Pascal VOC pixel boxes); no path constants changed. Only annotated plots' RGB tifs are extracted; the zip also holds LiDAR, hyperspectral and CHM data that this project does not use.
 
+The 32 annotation XMLs without an image are absent from the Zenodo `evaluation.zip` itself (central directory read over HTTP range requests: 2,439 RGB tifs, none with those stems), not merely unextracted; the evaluation therefore runs on 194 plots.
+
 ## NEON training data on Drive (Colab conversion)
 
 Drive layout under `MyDrive/fair_trees/`, written by `experiments/notebooks/colab_convert.ipynb`.
