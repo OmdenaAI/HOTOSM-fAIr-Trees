@@ -114,7 +114,9 @@ def _write_json(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, indent=2))
 
 
-def _write_region(out_root: Path, stem: str, split: str, scene: _Scene, chips: list[_Chip]) -> list[float]:
+def _write_region(
+    out_root: Path, stem: str, split: str, scene: _Scene, chips: list[_Chip]
+) -> tuple[list[float], float]:
     """Move the chips into the region folder and write its files.
 
     Returns each chip's invalid share and the region's valid ground area in m^2.

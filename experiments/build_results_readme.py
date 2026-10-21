@@ -68,8 +68,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     readme = args.results / "README.md"
     text = build(args.results)
     if args.check:
-        # Bytes both ways, so platform line endings never make a current file look stale.
-        current = readme.read_bytes().decode("utf-8") if readme.exists() else None
+        # read_text uses universal newlines, so a CRLF checkout (git autocrlf on Windows) is not stale
+        current = readme.read_text(encoding="utf-8") if readme.exists() else None
         if current != text:
             logger.error("%s is stale; run python -m experiments.build_results_readme", readme)
             return 1

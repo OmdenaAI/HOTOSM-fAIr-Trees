@@ -105,6 +105,7 @@ def test_main_writes_run_files_and_calls_train(monkeypatch, setup, tmp_path):
         "mlflow_run_id",
         "units_used",
     } <= set(env)
+    assert env["num_workers"] == 2
     assert json.loads((drive / "runs" / "r2" / "config.json").read_text())["parsed"]["learning_rate"] == 0.002
 
 

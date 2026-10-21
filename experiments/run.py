@@ -175,6 +175,7 @@ def main(
             "mlflow_run_id": None,
             "units_used": None,
             **env,
+            "num_workers": num_workers,  # of the latest session; samples/s depends on it
             "repo_sha": sha,
             "torch": torch.__version__,
             "torchvision": torchvision.__version__,

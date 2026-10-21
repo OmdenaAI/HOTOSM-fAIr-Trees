@@ -52,6 +52,12 @@ def test_check_mode(tmp_path):
     assert main(["--results", str(tmp_path), "--check"]) == 0
 
 
+def test_check_mode_accepts_a_crlf_checkout(tmp_path):
+    _write(tmp_path, "neon-release", _report(0.72, 0.69, 0.75))
+    (tmp_path / "README.md").write_bytes(build(tmp_path).replace("\n", "\r\n").encode("utf-8"))
+    assert main(["--results", str(tmp_path), "--check"]) == 0
+
+
 def test_committed_readme_is_current():
     if not (ROOT / "README.md").exists():
         pytest.skip("no committed results README yet")

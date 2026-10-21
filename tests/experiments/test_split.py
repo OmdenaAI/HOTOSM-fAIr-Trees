@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from experiments.leakage import box_distance_m, near_footprints
-from experiments.split import block_split, group_split
+from experiments.split import MAX_GROUPS, block_split, group_split
 
 X0 = Y0 = 2**19
 
@@ -109,6 +109,16 @@ def test_group_split_no_tiles():
 def test_group_split_bad_arguments(val_ratio, scenes):
     with pytest.raises(ValueError):
         group_split([(X0, Y0, 20)], scenes, val_ratio=val_ratio, seed=0)
+
+
+def test_group_split_refuses_more_groups_than_the_exact_search_handles():
+    tiles, scenes = [], []
+    for g in range(MAX_GROUPS + 1):  # scenes 100 tiles (~3.8 km) apart: one group each
+        t, s = _row(f"s{g}", 100 * g, 1)
+        tiles += t
+        scenes += s
+    with pytest.raises(ValueError, match="scene groups"):
+        group_split(tiles, scenes, val_ratio=0.15, seed=0)
 
 
 def test_group_split_weighs_groups_by_ground_area():
