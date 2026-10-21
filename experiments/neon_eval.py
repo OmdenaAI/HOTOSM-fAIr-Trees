@@ -1,12 +1,12 @@
 """NeonTreeEvaluation eval-plot loader and the DeepForest-compatible inference settings."""
 
 import logging
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
 import rasterio
 
+from experiments.converters.neon import voc_boxes
 from fair_trees.evaluate import EvalUnit
 from fair_trees.params import InferenceParams
 from fair_trees.preprocess import array_mosaic
@@ -30,14 +30,6 @@ RGB_DIR = Path("evaluation") / "RGB"
 NEON_GSD_M = 0.1
 
 
-def _read_boxes(xml_path: Path) -> np.ndarray:
-    boxes = [
-        [float(obj.findtext(f"bndbox/{k}")) for k in ("xmin", "ymin", "xmax", "ymax")]
-        for obj in ET.parse(xml_path).getroot().iter("object")
-    ]
-    return np.asarray(boxes, np.float32).reshape(-1, 4)
-
-
 def site_code(stem: str) -> str:
     """First four-letter alphabetic token of a plot name (NEON site code), else "unknown"."""
     for token in stem.split("_"):
@@ -58,5 +50,5 @@ def load_eval_plots(root: Path) -> list[EvalUnit]:
         with rasterio.open(image) as src:
             rgb = np.ascontiguousarray(src.read([1, 2, 3]).transpose(1, 2, 0))
         meta = {"source": "neon", "site": site_code(stem), "zoom": "native"}
-        units.append(EvalUnit(stem, array_mosaic(rgb, gsd_m=NEON_GSD_M), _read_boxes(xml_path), None, meta))
+        units.append(EvalUnit(stem, array_mosaic(rgb, gsd_m=NEON_GSD_M), voc_boxes(xml_path), None, meta))
     return units

@@ -17,3 +17,68 @@ sha256sum weights/NEON.pt tests/data_local/OSBS_029.tif
 ```
 
 NeonTreeEvaluation layout matches the loader defaults (`evaluation/RGB/<PLOT>.tif`, `annotations/<PLOT>.xml`, Pascal VOC pixel boxes); no path constants changed. Only annotated plots' RGB tifs are extracted; the zip also holds LiDAR, hyperspectral and CHM data that this project does not use.
+
+The 32 annotation XMLs without an image are absent from the Zenodo `evaluation.zip` itself (central directory read over HTTP range requests: 2,439 RGB tifs, none with those stems), not merely unextracted; the evaluation therefore runs on 194 plots.
+
+## NEON training data on Drive (Colab conversion)
+
+Drive layout under `MyDrive/fair_trees/`, written by `experiments/notebooks/colab_convert.ipynb`.
+
+| Item | URL | sha256 | Retrieved |
+|---|---|---|---|
+| `raw/neon/annotations.zip` (NeonTreeEvaluation v0.2.2, Zenodo 10.5281/zenodo.5914554, CC-BY-4.0) | https://zenodo.org/api/records/5914554/files/annotations.zip/content | 2b765abc14c3492479ba929933a86aa2b5c0a8ce6142dc5d458be606eb3c20ff | 2026-10-19 |
+| `raw/neon/evaluation.zip` | https://zenodo.org/api/records/5914554/files/evaluation.zip/content | 97e06a47cd3c1d80859aa9a3e9424edac405775dbd42d3b3ce0af07d6cf60406 | 2026-10-19 |
+| `raw/neon/training.zip` (20 RGB rasters, with CHM, LiDAR and hyperspectral; folders at the zip root) | https://zenodo.org/api/records/5914554/files/training.zip/content | 0cdba2c3794f74a9e7bb4d3eaa9247d010944d0cb76ca4f0b2a0cad0abeffa8b | 2026-10-19 |
+| `raw/resolve/Ecoregions2017.zip` (RESOLVE Ecoregions 2017, 149,248,653 bytes, Last-Modified 2019-05-07) | https://storage.googleapis.com/teow2016/Ecoregions2017.zip | be36d6209e443038d02e309f0447c6e7f2a62f5fe60c605ffe90d064952f2a60 (same URL hashed locally on the same day; the Drive copy was not hashed) | 2026-10-19 |
+| `weights/NEON.pt` | as in the table above | not hashed on Drive; the release-baseline run checks it against the reproduction F1 | 2026-10-19 |
+
+### NEON checks
+
+1. **Eval plots have a CRS: yes.** All 194 annotated plots do (`eval_plot_footprints` returns 194). The archive also holds
+   unannotated plot images, some without a CRS (e.g. `JERC_047_2019.tif`); they are never scored, so the 1 km exclusion
+   ignores them.
+2. **Training rasters have a CRS: 17 of 20.** `2019_DSNY_5_452000_3113000_image_crop`,
+   `2019_YELL_2_528000_4978000_image_crop2` and `2019_YELL_2_541000_4977000_image_crop` have none and are skipped: the name
+   gives the 1 km tile corner, not the crop's offset. All 17 are 0.10 m in UTM. The three hold 1,761 boxes (DSNY 888,
+   YELL 574 and 299; median box side 38-47 px, in line with 0.10 m). If each crop lies inside its named 1 km tile
+   (unchecked; testable on the 17 georeferenced rasters), it can be placed to within 1 km, which is enough for the
+   1 km exclusion (the nearest DSNY eval plot is 8.3 km from the DSNY tile; YELL has no eval plots) and for the
+   split. Placing them from the name is left for the base-training converters: the NEON fine-tune tests the
+   training stack, and 8% more boxes would not change any of its checks.
+3. **Fully annotated: partly checked.** On the contact sheet the boxes sit on the crowns in every chip with trees. The
+   two-rasters-per-site overlay was not done, so coverage of whole rasters is unverified.
+4. **Site latitudes and zooms:** see `theory.md` section 6. Only TOOL (68.65 N) is above the z20 limit and has z19 only.
+5. **Licence:** CC-BY-4.0 on the Zenodo record.
+
+Black collar: `2019_SJER_4_251000_4103000_image` stores a black collar as (0, 0, 0) pixels with no nodata
+value; before the tiler treated pure black as nodata in such sources, 491 of its 1,403 chips were mostly black yet valid.
+
+### Split
+
+The rasters (0.1-0.6 km) are smaller than the 1 km train/val buffer. A per-site block split could not reach a 10-20% val
+share (simulated on the tiled chips, z20 counts):
+
+| Block size (z19 tiles) | Train | Val | Dropped by buffer | Val share |
+|---|---|---|---|---|
+| 2 | 2 | 628 | 3,112 | 1.00 |
+| 4 | 27 | 730 | 2,985 | 0.96 |
+| 8 | 75 | 729 | 2,938 | 0.91 |
+| 16 | 1,726 | 782 | 1,234 | 0.31 |
+| 32 | 2,004 | 811 | 927 | 0.29 |
+
+The converter uses a group split instead: rasters closer than 1 km form one group, and val is the set of whole groups whose
+ground area is closest to 15%.
+
+### Conversion result (converter 90875d94c6af571e8aa5e3834b1a3f0e51a9e1ba)
+
+| Zoom | Train chips | Val chips |
+|---|---|---|
+| z19 | 1,932 | 171 |
+| z20 | 2,463 | 586 |
+
+- `val_share` (valid ground area) 0.125, `dropped_by_buffer` 0, `excluded_near_eval_plots` 2,408, `masked_pct` 5.6, 21,087
+  boxes.
+- Val scenes: BART, HARV, JERC, MLBS (two rasters), NIWO, DELA, LENO and ONAQ. Train: the OSBS, SJER, TEAK and TOOL scenes.
+- Shard manifest sha256 `5bbeca8e879491ed5835c137dca01dcc52870d0d6623d2152217342772d9b428`.
+- Drive-to-`/content` copy of `z20-0000.tar`: 97.6 MB/s (an earlier conversion measured 307.5 MB/s); restaging all
+  shards takes well under 10 minutes.

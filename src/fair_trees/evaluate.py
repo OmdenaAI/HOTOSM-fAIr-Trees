@@ -11,9 +11,10 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from fair_trees.dataset import Region, boxes_in_window, labels_to_boxes, load_geojson, rasterize_mask
 from fair_trees.decode import Detections, filter_score
 from fair_trees.params import InferenceParams
-from fair_trees.preprocess import Mosaic
+from fair_trees.preprocess import Mosaic, mosaic_chips
 from fair_trees.serve import RunFn, predict_mosaic
 
 
@@ -250,6 +251,57 @@ def evaluate_units(
         sweep=sweep,
         units=unit_rows,
         breakdown=breakdown,
+    )
+
+
+def region_units(regions: Sequence[Region], *, zooms: Sequence[int] = (20, 19)) -> list[EvalUnit]:
+    """One unit per mosaic of each region, at the first of ``zooms`` the region has (else its lowest).
+
+    Ignore polygons only mask predictions; labels are dropped only where the footprint or chip validity
+    masks them.
+    """
+    units = []
+    for region in regions:
+        z = next((z for z in zooms if z in region.chips), None)
+        if z is None:
+            z = min(region.chips)
+        mosaics = mosaic_chips(region.chips[z], use_sidecar=False)
+        labels = load_geojson(region.labels_path)
+        has_mask = region.footprint is not None or region.ignore_path is not None
+        for k, m in enumerate(mosaics):
+            h, w = m.rgb.shape[:2]
+            boxes = labels_to_boxes(labels, m.transform_3857)
+            unmasked = m.valid & ~rasterize_mask(region, m.transform_3857, (h, w), ignore=False)
+            units.append(
+                EvalUnit(
+                    unit_id=region.id if len(mosaics) == 1 else f"{region.id}#{k}",
+                    mosaic=m,
+                    gt_boxes=boxes_in_window(boxes, unmasked, 0, 0, w, h),
+                    ignore_mask=rasterize_mask(region, m.transform_3857, (h, w)) if has_mask else None,
+                    meta={"source": region.source, "biome": region.biome, "zoom": str(z)},
+                )
+            )
+    return units
+
+
+def evaluate_regions(
+    run_fn: RunFn,
+    regions: Sequence[Region],
+    params: InferenceParams,
+    *,
+    zooms: Sequence[int] = (20, 19),
+    thresholds: np.ndarray = SWEEP_THRESHOLDS,
+    iou_threshold: float = 0.4,
+    ignore: bool = True,
+) -> EvalReport:
+    """Evaluate on region mosaics with crowd ignore; see ``region_units`` for how units are built."""
+    return evaluate_units(
+        run_fn,
+        region_units(regions, zooms=zooms),
+        params,
+        thresholds=thresholds,
+        iou_threshold=iou_threshold,
+        ignore=ignore,
     )
 
 

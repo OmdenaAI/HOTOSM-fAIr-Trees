@@ -14,6 +14,10 @@ Rules for agents working in this repo.
 - Tag claims in theory.md and docs as [V] verified, [P] proposed, [?] unknown.
 - `docs/` is local only: never `git add` it. Commit messages carry no Co-Authored-By/Claude-Session lines.
 - td-hot (no LICENSE) is a reference for structure only; never copy its code.
+- `fair_trees.dataset` and `fair_trees.augment` are torch-free; only `train.py` and `export.py` import torch.
+- `src/` never imports mlflow, yaml, shapely, geopandas or huggingface_hub; those are experiments-only.
+- `plan_epoch` must stay a pure function of (regions, cfg, seed, epoch); never store RNG state for resume.
+- Never delete a checkpoint before the next one exists on disk with the right size.
 
 Commands: `uv sync --extra train --extra test`, `uv run pytest -q`, `uv run pytest -m integration`,
 `uv run ruff check . && uv run ruff format --check .`.
