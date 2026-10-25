@@ -557,6 +557,17 @@ def train(
     return TrainResult(out_dir / "best.pt", last_path, s.best_metrics, s.history)
 
 
+def fair_data_hash(train_chips: Sequence[Path], val_chips: Sequence[Path], labels_path: Path) -> str:
+    """sha256 over each chip's split, name and bytes (in name order) and the labels file's bytes."""
+    h = hashlib.sha256()
+    for split, chips in (("train", train_chips), ("val", val_chips)):
+        for path in sorted(map(Path, chips), key=lambda p: p.name):
+            h.update(f"{split}/{path.name}\n".encode())
+            h.update(hashlib.sha256(path.read_bytes()).digest())
+    h.update(Path(labels_path).read_bytes())
+    return h.hexdigest()
+
+
 def fine_tune(
     train_chips: Sequence[Path],
     val_chips: Sequence[Path],
@@ -572,8 +583,10 @@ def fine_tune(
     """Fine-tune on a mapper's chips, already split into train and val by fAIr; no internal re-split.
 
     Without explicit `zoom_weights`, every zoom present in the train chips gets weight 1, so a z18 or z22
-    dataset is never filtered out by the base-training defaults.
+    dataset is never filtered out by the base-training defaults. Unless given, the manifest hash covers
+    the chip files, their split and the labels, so a resume on changed data is refused.
     """
+    train_kwargs.setdefault("manifest_hash", fair_data_hash(train_chips, val_chips, labels_path))
     cfg = parse_train_params(hyperparameters)
     train_regions = load_fair_dataset(train_chips, labels_path, split="train")
     val_regions = load_fair_dataset(val_chips, labels_path, split="val")
