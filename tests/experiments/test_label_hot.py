@@ -1,11 +1,14 @@
 import json
 
-import geopandas as gpd
 import numpy as np
-from shapely.geometry import Point, box
+import pytest
 
-from experiments.label_study.hot import load_hot, masking_cost, parse_diameter
-from fair_trees.georef import tile_bounds_4326
+gpd = pytest.importorskip("geopandas")
+
+from shapely.geometry import Point, box  # noqa: E402
+
+from experiments.label_study.hot import load_hot, masking_cost, parse_diameter  # noqa: E402
+from fair_trees.georef import tile_bounds_4326  # noqa: E402
 
 TILE_A, TILE_B = "OAM-485900-499600-20", "OAM-485901-499600-20"
 

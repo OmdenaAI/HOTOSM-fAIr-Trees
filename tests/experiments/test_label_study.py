@@ -1,9 +1,11 @@
 import numpy as np
-import pandas as pd
 import pytest
 
-from experiments.label_study.hot import UnitTruth
-from experiments.label_study.study import (
+pytest.importorskip("geopandas")
+pd = pytest.importorskip("pandas")
+
+from experiments.label_study.hot import UnitTruth  # noqa: E402
+from experiments.label_study.study import (  # noqa: E402
     SLIVER_M2,
     UnitRecord,
     choose,
@@ -15,9 +17,9 @@ from experiments.label_study.study import (
     score_test,
     sweep,
 )
-from fair_trees.decode import Detections
-from fair_trees.evaluate import Counts
-from fair_trees.preprocess import Mosaic
+from fair_trees.decode import Detections  # noqa: E402
+from fair_trees.evaluate import Counts  # noqa: E402
+from fair_trees.preprocess import Mosaic  # noqa: E402
 
 GSD = 0.15
 

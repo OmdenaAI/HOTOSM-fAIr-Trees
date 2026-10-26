@@ -1,22 +1,24 @@
 import math
 
-import geopandas as gpd
 import numpy as np
-import pandas as pd
 import pytest
 import rasterio
 from rasterio.transform import from_origin
-from shapely.geometry import Point, box
 
-from experiments.label_study.audit import (
+gpd = pytest.importorskip("geopandas")
+pd = pytest.importorskip("pandas")
+
+from shapely.geometry import Point, box  # noqa: E402
+
+from experiments.label_study.audit import (  # noqa: E402
     LABEL_COLUMNS,
     coco_labels,
     geo_labels,
     neon_labels,
     profile,
 )
-from experiments.label_study.hot import HotData, hot_labels
-from fair_trees.georef import tile_bounds_4326
+from experiments.label_study.hot import HotData, hot_labels  # noqa: E402
+from fair_trees.georef import tile_bounds_4326  # noqa: E402
 
 
 def labels_of(rows, cls="tree"):

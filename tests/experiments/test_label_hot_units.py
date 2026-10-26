@@ -1,14 +1,16 @@
 import io
 import math
 
-import geopandas as gpd
 import numpy as np
 import pytest
 from PIL import Image
-from shapely.geometry import MultiPolygon, Point, box
 
-from experiments.label_study.hot import HotData, split_units, unit_mosaic, unit_truth
-from fair_trees.georef import mercator_y_to_lat, tile_bounds_4326
+gpd = pytest.importorskip("geopandas")
+
+from shapely.geometry import MultiPolygon, Point, box  # noqa: E402
+
+from experiments.label_study.hot import HotData, split_units, unit_mosaic, unit_truth  # noqa: E402
+from fair_trees.georef import mercator_y_to_lat, tile_bounds_4326  # noqa: E402
 
 pytestmark = pytest.mark.filterwarnings("ignore:Dataset has no geotransform")
 
