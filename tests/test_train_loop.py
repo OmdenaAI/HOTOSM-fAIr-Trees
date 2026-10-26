@@ -193,6 +193,35 @@ def test_fine_tune_on_fair_chips(monkeypatch, write_oam_chip, geo, weights, tmp_
     assert res.history[0]["sampler/draws/zoom/22"] == 3.0
 
 
+def test_fine_tune_refuses_to_resume_on_changed_data(monkeypatch, write_oam_chip, geo, weights, tmp_path):
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(4)]
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps(geo.feature_collection([geo.box_polygon((5, 5, 15, 15))])))
+    script = Script([0.2, 0.3])
+    monkeypatch.setattr(T, "forward_loss", script.forward_loss)
+    monkeypatch.setattr(T, "_validate", script.validate)
+
+    def run(train_chips, val_chips):
+        return T.fine_tune(
+            train_chips,
+            val_chips,
+            labels,
+            {"epochs": 2, "batch_size": 2, "amp": False},
+            weights=weights,
+            out_dir=tmp_path / "ft",
+            num_workers=0,
+            tmp_dir=tmp_path / "tmp",
+        )
+
+    first = run(chips[:3], chips[3:])
+    assert run(chips[:3], chips[3:]).history == first.history and script.calls == 4  # same data: finished run
+    with pytest.raises(ValueError, match="manifest hash changed"):
+        run(chips[:2], chips[2:])  # a chip moved from train to val
+    labels.write_text(json.dumps(geo.feature_collection([geo.box_polygon((5, 5, 25, 25))])))
+    with pytest.raises(ValueError, match="manifest hash changed"):
+        run(chips[:3], chips[3:])
+
+
 @pytest.mark.parametrize("saved_enabled", [False, True])
 def test_scaler_state_crosses_amp_modes(saved_enabled):
     # a run saved on CPU or with bf16 (disabled scaler) resumes under fp16 (enabled), and the reverse
