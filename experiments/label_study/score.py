@@ -25,8 +25,8 @@ def match_points(boxes: np.ndarray, points: np.ndarray) -> list[tuple[int, int]]
     from scipy.sparse import coo_matrix
     from scipy.sparse.csgraph import connected_components
 
-    centres = (boxes[box_idx, :2] + boxes[box_idx, 2:]) / 2
-    dist = np.linalg.norm(centres - points[point_idx], axis=1)
+    box_centres = (boxes[box_idx, :2] + boxes[box_idx, 2:]) / 2
+    dist = np.linalg.norm(box_centres - points[point_idx], axis=1)
     diagonal = np.linalg.norm(boxes[box_idx, 2:] - boxes[box_idx, :2], axis=1)
     edge_cost = dist / (diagonal + 1)
 
