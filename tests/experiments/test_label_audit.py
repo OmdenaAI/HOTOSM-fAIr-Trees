@@ -79,6 +79,28 @@ def test_coco_labels_scale_boxes_and_split_classes():
     assert regions.area_m2.iloc[0] == pytest.approx(50.0)
 
 
+def coco_with(*anns):
+    image = {"id": 1, "width": 10, "height": 8}
+    return {
+        "images": [image],
+        "annotations": [{"image_id": 1, "category_id": 1, "bbox": [0, 0, 10, 8]} | a for a in anns],
+    }
+
+
+def test_coco_labels_measure_zero_area_crowds_from_their_segmentation():
+    rle = {"area": 0, "iscrowd": 1, "segmentation": {"size": [8, 10], "counts": [2, 6, 72]}}
+    square = {"area": 0, "iscrowd": 0, "segmentation": [[0, 0, 4, 0, 4, 4, 0, 4]]}
+    labels, _ = coco_labels(coco_with(rle, square, {"area": 0}), source="oamtcd", gsd_m=0.1, tree_ids={1})
+    assert labels.area_m2.tolist() == pytest.approx([0.06, 0.16, 0.8])  # RLE runs, shoelace, box
+
+
+def test_coco_labels_decode_compressed_rle():
+    # "0X12N" is runs [0, 40, 2, 38]: "X1" is 40 in two 5-bit chunks, "N" is -2 added to the run two back
+    rle = {"area": 0, "iscrowd": 1, "segmentation": {"size": [8, 10], "counts": "0X12N"}}
+    labels, _ = coco_labels(coco_with(rle), source="oamtcd", gsd_m=0.1, tree_ids={1})
+    assert labels.area_m2.iloc[0] == pytest.approx(0.78)
+
+
 def test_profile_touching_and_hot_rule_shares():
     # (x_m, y_m, w_m, h_m): three 2 m crowns in a touching row and one alone
     labels = table_with_trees([(0, 0, 2, 2), (2, 0, 2, 2), (4, 0, 2, 2), (20, 20, 2, 2)])

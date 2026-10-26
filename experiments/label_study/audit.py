@@ -34,6 +34,47 @@ def region_table(source: str, region, area_m2) -> pd.DataFrame:
     return pd.DataFrame(dict(zip(REGION_COLUMNS, columns, strict=True)))
 
 
+def _rle_counts(text: str) -> list[int]:
+    """Run lengths from a COCO compressed RLE string (pycocotools' ``rleFrString``)."""
+    counts: list[int] = []
+    pos = 0
+    while pos < len(text):
+        value, shift, more = 0, 0, True
+        while more:
+            c = ord(text[pos]) - 48
+            value |= (c & 0x1F) << shift
+            more = bool(c & 0x20)
+            pos += 1
+            shift += 5
+            if not more and c & 0x10:
+                value |= -1 << shift  # sign-extend the last 5-bit chunk
+        if len(counts) > 2:
+            value += counts[-2]  # runs after the third are stored as deltas
+        counts.append(value)
+    return counts
+
+
+def _shoelace(flat: Sequence[float]) -> float:
+    x, y = np.asarray(flat, float).reshape(-1, 2).T
+    return abs(float(x @ np.roll(y, -1) - y @ np.roll(x, -1))) / 2
+
+
+def _area_px(ann: Mapping) -> float | None:
+    """Pixel area: ``area`` if positive, else the segmentation's area, else None.
+
+    OAM-TCD's crowd (RLE) masks carry area 0.
+    """
+    if (ann.get("area") or 0) > 0:
+        return float(ann["area"])
+    seg = ann.get("segmentation")
+    if isinstance(seg, dict):  # RLE: runs alternate background, foreground, starting with background
+        counts = _rle_counts(seg["counts"]) if isinstance(seg["counts"], str) else seg["counts"]
+        return float(sum(counts[1::2]))
+    if seg:
+        return sum(_shoelace(polygon) for polygon in seg)
+    return None
+
+
 def coco_labels(
     coco: Mapping,
     *,
@@ -50,8 +91,8 @@ def coco_labels(
     classes = dict.fromkeys(tree_ids, "tree") | dict.fromkeys(group_ids, "group")
     anns = [a for a in coco["annotations"] if a["category_id"] in classes]
     x, y, w, h = np.asarray([a["bbox"] for a in anns], float).reshape(-1, 4).T * gsd_m
-    # a missing or zero area (OAM-TCD's crowd RLE masks carry area 0) falls back to the box area
-    area = [a["area"] * gsd_m**2 if a.get("area") else bw * bh for a, bw, bh in zip(anns, w, h, strict=True)]
+    px = [_area_px(a) for a in anns]
+    area = [bw * bh if p is None else p * gsd_m**2 for p, bw, bh in zip(px, w, h, strict=True)]
     cls = [classes[a["category_id"]] for a in anns]
     labels = label_table(source, [a["image_id"] for a in anns], cls, x, y, x + w, y + h, area)
     return labels, regions
