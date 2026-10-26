@@ -1,11 +1,10 @@
-import dataclasses
-
 import numpy as np
 import pandas as pd
 import pytest
 
 from experiments.label_study.hot import UnitTruth
 from experiments.label_study.study import (
+    SLIVER_M2,
     UnitRecord,
     choose,
     load_records,
@@ -17,24 +16,40 @@ from experiments.label_study.study import (
     sweep,
 )
 from fair_trees.decode import Detections
+from fair_trees.evaluate import Counts
 from fair_trees.preprocess import Mosaic
 
 GSD = 0.15
 
 
-def _record(unit_id, boxes, scores, points, diam, groups, in_group=None, split="test", dense=False):
+def _record(
+    unit_id,
+    boxes,
+    scores,
+    points,
+    diam,
+    groups,
+    in_group=None,
+    split="test",
+    area=None,
+    edge=None,
+    cover=None,
+):
     boxes = np.array(boxes, np.float32).reshape(-1, 4)
+    groups = np.array(groups, np.float64).reshape(-1, 4)
     return UnitRecord(
         unit_id=unit_id,
         split=split,
-        dense=dense,
         gsd_m=GSD,
         boxes=boxes,
         scores=np.array(scores, np.float32),
         in_group=np.zeros(len(boxes), bool) if in_group is None else np.array(in_group, bool),
         tree_points=np.array(points, np.float64).reshape(-1, 2),
         tree_diam_px=np.array(diam, np.float64),
-        group_boxes=np.array(groups, np.float64).reshape(-1, 4),
+        group_boxes=groups,
+        group_area_m2=np.full(len(groups), 1000.0) if area is None else np.array(area, np.float64),
+        group_edge=np.zeros(len(groups), bool) if edge is None else np.array(edge, bool),
+        tile_cover=np.zeros((1, 1), np.float32) if cover is None else np.array(cover, np.float32),
     )
 
 
@@ -64,26 +79,42 @@ def _build(offset):
     return build
 
 
-def test_make_record_flags_boxes_in_groups_and_dense():
+def test_make_record_flags_boxes_in_groups():
     mosaic, truth = _build(0)()
-    truth = dataclasses.replace(truth, group_cover=0.3)
     dets = Detections(
         np.array([[0, 0, 10, 10], [28, 4, 38, 14]], np.float32), np.array([0.9, 0.9], np.float32)
     )
     rec = make_record("u", "val", mosaic, truth, dets)
-    assert rec.in_group.tolist() == [False, True] and rec.dense and rec.gsd_m == GSD and rec.split == "val"
+    assert rec.in_group.tolist() == [False, True] and rec.gsd_m == GSD and rec.split == "val"
+    assert rec.group_edge.tolist() == [True] and rec.tile_cover.tolist() == [[0.25]]
+    assert np.array_equal(rec.group_area_m2, truth.group_area_m2)
 
 
 def test_record_round_trip_and_tmp_files_are_ignored(tmp_path):
-    rec_a = _record("test-0-0-0", [[0, 0, 10, 10]], [0.9], [[5, 5]], [4.0], [[0, 0, 5, 5]], dense=True)
+    rec_a = _record(
+        "test-0-0-0", [[0, 0, 10, 10]], [0.9], [[5, 5]], [4.0], [[0, 0, 5, 5]], edge=[True], cover=[[0.5, 0]]
+    )
     rec_b = _record("test-0-0-1", [[0, 0, 4, 4]], [0.9], [[2, 2]], [3.0], [], split="val")
     save_record(rec_a, tmp_path)
     save_record(rec_b, tmp_path)
     (tmp_path / "test-0-0-2.npz.tmp").write_bytes(b"partial")
     loaded = load_records(tmp_path, "test")
     assert [r.unit_id for r in loaded] == ["test-0-0-0"]
-    assert np.array_equal(loaded[0].boxes, rec_a.boxes) and loaded[0].dense == rec_a.dense
+    assert np.array_equal(loaded[0].boxes, rec_a.boxes) and loaded[0].group_edge.tolist() == [True]
+    assert np.array_equal(loaded[0].tile_cover, rec_a.tile_cover) and loaded[0].group_area_m2.tolist() == [
+        1000
+    ]
     assert loaded[0].gsd_m == GSD and loaded[0].split == "test"
+
+
+def test_a_record_from_another_version_does_not_load(tmp_path):
+    path = save_record(_record("test-0-0-0", [], [], [], [], []), tmp_path)
+    with np.load(path) as z:
+        fields = dict(z)
+    with open(path, "wb") as f:
+        np.savez(f, **(fields | {"version": 1}))
+    with pytest.raises(ValueError, match="test-0-0-0.npz"):
+        load_records(tmp_path, "test")
 
 
 def test_run_units_skips_finished_units(tmp_path):
@@ -111,6 +142,28 @@ def test_score_threshold_filters_before_merging():
     rec = _record("u", [[0, 0, 10, 10], [10, 0, 20, 10], [20, 0, 30, 10]], [0.9, 0.2, 0.9], [], [], [])
     low, high = score_record(rec, 0.1, 0.0, 3).groups_40, score_record(rec, 0.5, 0.0, 3).groups_40
     assert low.tp + low.fp == 1 and high.tp + high.fp == 0
+
+
+def test_edge_slivers_are_ignored_in_the_group_score():
+    # an edge sliver, an interior part as small and an edge part above SLIVER_M2; no predictions
+    small = SLIVER_M2 / 2
+    groups = [[0, 0, 5, 5], [20, 0, 25, 5], [40, 0, 100, 60]]
+    rec = _record("u", [], [], [], [], groups, area=[small, small, 2 * SLIVER_M2], edge=[True, False, True])
+    out = score_record(rec, 0.1, 0.0, 2)
+    assert out.groups_40 == Counts(0, 0, 2) and out.groups_25 == Counts(0, 0, 2)
+    assert out.groups_40_all == Counts(0, 0, 3)
+
+
+def test_dense_counts_keep_only_the_dense_tile():
+    # two 256 px tiles side by side, only the left one dense; per tile a matched tree, a spare box and a group
+    boxes = [[90, 90, 110, 110], [150, 150, 160, 160], [390, 90, 410, 110], [450, 150, 460, 160]]
+    points = [[100, 100], [400, 100]]
+    groups = [[10, 200, 60, 250], [300, 200, 360, 250]]
+    rec = _record("u", boxes, [0.9] * 4, points, [np.nan] * 2, groups, cover=[[0.5, 0.0]])
+    out = score_record(rec, 0.1, 0.0, 2)
+    assert out.dense_tiles == 1
+    assert out.trees == Counts(2, 2, 0) and out.dense_trees == Counts(1, 1, 0)
+    assert out.groups_40 == Counts(0, 0, 2) and out.dense_groups_40 == Counts(0, 0, 1)
 
 
 def test_sweep_covers_the_grid_and_choose_breaks_ties():

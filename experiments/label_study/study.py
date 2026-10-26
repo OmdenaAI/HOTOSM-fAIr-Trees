@@ -8,9 +8,17 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from experiments.label_study.hot import UnitTruth
+from experiments.label_study.hot import TILE_PX, UnitTruth
 from experiments.label_study.merge import apply_clusters, cluster_boxes
-from experiments.label_study.score import UnitScore, match_points, score_groups, score_trees, summarise
+from experiments.label_study.score import (
+    UnitScore,
+    centres,
+    match_groups,
+    match_points,
+    match_trees,
+    score_groups,
+    summarise,
+)
 from fair_trees.decode import Detections, filter_score
 from fair_trees.evaluate import Counts, prf
 from fair_trees.preprocess import Mosaic
@@ -20,7 +28,10 @@ GRID = {
     "gap_m": (0.0, 0.5, 1.0, 2.0),
     "min_crowns": (2, 3, 4, 5, 6, 8),
 }
-DENSE_COVER = 0.3
+DENSE_COVER = 0.3  # a tile is dense when this share of it lies inside groups
+# an edge-clipped group part below this ground area is an ignore region: no cluster of crowns can match it
+SLIVER_M2 = 50.0
+RECORD_VERSION = 2  # bump when the cached fields change, so stale records refuse to load
 
 
 @dataclass(frozen=True, eq=False)
@@ -29,7 +40,6 @@ class UnitRecord:
 
     unit_id: str
     split: str
-    dense: bool
     gsd_m: float
     boxes: np.ndarray
     scores: np.ndarray
@@ -37,17 +47,19 @@ class UnitRecord:
     tree_points: np.ndarray
     tree_diam_px: np.ndarray
     group_boxes: np.ndarray
+    group_area_m2: np.ndarray
+    group_edge: np.ndarray
+    tile_cover: np.ndarray
 
 
 def make_record(unit_id: str, split: str, mosaic: Mosaic, truth: UnitTruth, dets: Detections) -> UnitRecord:
     mask = truth.group_mask
-    centres = (dets.boxes[:, :2] + dets.boxes[:, 2:]) / 2
-    cols = np.clip(centres[:, 0].astype(np.int64), 0, mask.shape[1] - 1)
-    rows = np.clip(centres[:, 1].astype(np.int64), 0, mask.shape[0] - 1)
+    xy = centres(dets.boxes)
+    cols = np.clip(xy[:, 0].astype(np.int64), 0, mask.shape[1] - 1)
+    rows = np.clip(xy[:, 1].astype(np.int64), 0, mask.shape[0] - 1)
     return UnitRecord(
         unit_id=unit_id,
         split=split,
-        dense=bool(truth.group_cover >= DENSE_COVER),
         gsd_m=float(mosaic.gsd_m),
         boxes=dets.boxes,
         scores=dets.scores,
@@ -55,6 +67,9 @@ def make_record(unit_id: str, split: str, mosaic: Mosaic, truth: UnitTruth, dets
         tree_points=truth.tree_points,
         tree_diam_px=truth.tree_diam_px,
         group_boxes=truth.group_boxes,
+        group_area_m2=truth.group_area_m2,
+        group_edge=truth.group_edge,
+        tile_cover=truth.tile_cover,
     )
 
 
@@ -65,9 +80,9 @@ def save_record(rec: UnitRecord, cache_dir: Path) -> Path:
     with open(tmp, "wb") as f:  # a file handle keeps np.savez from appending ".npz"
         np.savez(
             f,
+            version=RECORD_VERSION,
             unit_id=rec.unit_id,
             split=rec.split,
-            dense=rec.dense,
             gsd_m=rec.gsd_m,
             boxes=rec.boxes,
             scores=rec.scores,
@@ -75,6 +90,9 @@ def save_record(rec: UnitRecord, cache_dir: Path) -> Path:
             tree_points=rec.tree_points,
             tree_diam_px=rec.tree_diam_px,
             group_boxes=rec.group_boxes,
+            group_area_m2=rec.group_area_m2,
+            group_edge=rec.group_edge,
+            tile_cover=rec.tile_cover,
         )
     os.replace(tmp, final)
     return final
@@ -82,10 +100,15 @@ def save_record(rec: UnitRecord, cache_dir: Path) -> Path:
 
 def _load_record(path: Path) -> UnitRecord:
     with np.load(path) as z:
+        version = int(z["version"]) if "version" in z else 1
+        if version != RECORD_VERSION:
+            raise ValueError(
+                f"{path}: cached record version {version}, expected {RECORD_VERSION};"
+                " delete the stale records and rerun the predict cell"
+            )
         return UnitRecord(
             unit_id=str(z["unit_id"]),
             split=str(z["split"]),
-            dense=bool(z["dense"]),
             gsd_m=float(z["gsd_m"]),
             boxes=z["boxes"],
             scores=z["scores"],
@@ -93,6 +116,9 @@ def _load_record(path: Path) -> UnitRecord:
             tree_points=z["tree_points"],
             tree_diam_px=z["tree_diam_px"],
             group_boxes=z["group_boxes"],
+            group_area_m2=z["group_area_m2"],
+            group_edge=z["group_edge"],
+            tile_cover=z["tile_cover"],
         )
 
 
@@ -123,14 +149,33 @@ def _kept(rec: UnitRecord, score: float) -> tuple[Detections, np.ndarray]:
     return filter_score(Detections(rec.boxes, rec.scores), score), rec.in_group[keep]
 
 
+def _in_dense_tile(rec: UnitRecord, xy: np.ndarray) -> np.ndarray:
+    """Whether each mosaic pixel position lies in a dense tile."""
+    dense = rec.tile_cover >= DENSE_COVER
+    rows = np.clip((xy[:, 1] // TILE_PX).astype(np.int64), 0, dense.shape[0] - 1)
+    cols = np.clip((xy[:, 0] // TILE_PX).astype(np.int64), 0, dense.shape[1] - 1)
+    return dense[rows, cols]
+
+
 def _score_clustered(rec: UnitRecord, dets: Detections, in_group, labels, min_crowns: int) -> UnitScore:
     merged = apply_clusters(dets, labels, min_crowns)
+    groups = merged.groups.boxes
+    ignore = rec.group_edge & (rec.group_area_m2 < SLIVER_M2)
+    trees = match_trees(merged.trees.boxes, in_group[merged.tree_index], rec.tree_points)
+    groups_40 = match_groups(groups, rec.group_boxes, 0.4, ignore)
     return UnitScore(
         unit_id=rec.unit_id,
-        dense=rec.dense,
-        trees=score_trees(merged.trees.boxes, in_group[merged.tree_index], rec.tree_points),
-        groups_40=score_groups(merged.groups.boxes, rec.group_boxes, 0.4),
-        groups_25=score_groups(merged.groups.boxes, rec.group_boxes, 0.25),
+        trees=trees.counts(),
+        groups_40=groups_40.counts(),
+        groups_25=score_groups(groups, rec.group_boxes, 0.25, ignore),
+        groups_40_all=score_groups(groups, rec.group_boxes, 0.4),
+        dense_tiles=int((rec.tile_cover >= DENSE_COVER).sum()),
+        dense_trees=trees.counts(
+            _in_dense_tile(rec, centres(merged.trees.boxes)), _in_dense_tile(rec, rec.tree_points)
+        ),
+        dense_groups_40=groups_40.counts(
+            _in_dense_tile(rec, centres(groups)), _in_dense_tile(rec, centres(rec.group_boxes))
+        ),
     )
 
 

@@ -1,7 +1,14 @@
 import numpy as np
 import pytest
 
-from experiments.label_study.score import UnitScore, match_points, score_groups, score_trees, summarise
+from experiments.label_study.score import (
+    UnitScore,
+    count_in,
+    match_points,
+    score_groups,
+    score_trees,
+    summarise,
+)
 from fair_trees.evaluate import Counts
 
 
@@ -59,12 +66,50 @@ def test_group_iou_thresholds():
     assert score_groups(pred2, gt2, 0.4).tp == 0 and score_groups(pred2, gt2, 0.25).tp == 1
 
 
-def test_summarise_pools_and_splits_dense():
+def test_ignored_edge_sliver_is_neither_missed_nor_a_false_positive_target():
+    gt = np.array([[0, 0, 100, 100], [200, 0, 205, 4]], float)  # the second is an ignored sliver
+    pred = np.array([[0, 0, 100, 100], [190, -10, 215, 14], [300, 300, 310, 310]], float)
+    # the second prediction is centred on the sliver but far below IoU 0.4 with it
+    assert score_groups(pred, gt, 0.4, ignore=np.array([False, True])) == Counts(tp=1, fp=1, fn=0)
+    assert score_groups(pred, gt, 0.4) == Counts(tp=1, fp=2, fn=1)
+
+
+def test_count_in_keeps_what_lies_in_the_region():
+    pairs = [(0, 0), (2, 2)]  # prediction 2 matches ground truth outside the region: neither TP nor FP
+    pred_in = np.array([True, False, True, True])
+    gt_in = np.array([True, True, False])
+    assert count_in(pairs, 4, 3, pred_in, gt_in) == Counts(tp=1, fp=1, fn=1)
+    assert count_in(pairs, 4, 3, np.ones(4, bool), np.ones(3, bool)) == Counts(tp=2, fp=2, fn=1)
+
+
+def unit_score(unit_id, dense_tiles, trees, dense_trees):
+    group = Counts(1, 0, 1)
+    return UnitScore(
+        unit_id=unit_id,
+        trees=trees,
+        groups_40=group,
+        groups_25=group,
+        groups_40_all=group,
+        dense_tiles=dense_tiles,
+        dense_trees=dense_trees,
+        dense_groups_40=group,
+    )
+
+
+def test_summarise_pools_all_units_and_the_dense_tiles():
     s = [
-        UnitScore("a", False, Counts(8, 2, 0), Counts(1, 0, 1), Counts(2, 0, 0)),
-        UnitScore("b", True, Counts(2, 2, 6), Counts(0, 1, 1), Counts(1, 0, 0)),
+        unit_score("a", 0, Counts(8, 2, 0), Counts(0, 0, 0)),
+        unit_score("b", 3, Counts(2, 2, 6), Counts(1, 1, 3)),
     ]
     out = summarise(s)
-    assert out["all"]["units"] == 2 and out["dense"]["units"] == 1
+    assert out["all"]["units"] == 2 and out["dense"]["units"] == 1 and out["dense"]["tiles"] == 3
     assert out["all"]["trees"]["precision"] == pytest.approx(10 / 14)
+    assert out["all"]["groups_40_all"]["recall"] == pytest.approx(0.5)
     assert out["dense"]["trees"]["recall"] == pytest.approx(0.25)
+
+
+def test_summarise_gives_none_for_an_empty_subset():
+    out = summarise([unit_score("a", 0, Counts(8, 2, 0), Counts(0, 0, 0))])
+    assert out["dense"]["units"] == 0 and out["dense"]["tiles"] == 0
+    assert out["dense"]["trees"] == {"precision": None, "recall": None, "f1": None, "f1_ci": None}
+    assert out["dense"]["groups_40"]["f1"] is None
