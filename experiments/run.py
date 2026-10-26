@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from fair_trees.params import InferenceParams
     from fair_trees.serve import RunFn
     from fair_trees.train import TrainResult
 
@@ -33,7 +34,7 @@ BENCHMARK = Path(__file__).parent / "benchmark.json"
 
 CONFIG_KEYS = ("weights", "sources", "hyperparameters", "val", "mlflow")
 REQUIRED_KEYS = ("weights", "sources")
-DEFAULT_VAL = {"zooms": [20, 19], "max_regions": None}
+DEFAULT_VAL = {"zooms": [20, 19], "max_regions": None, "window_m": 40.0}
 MLFLOW_EXPERIMENT = "fair_trees"
 PARITY_UNITS = 3
 PARITY_ATOL = 2e-3
@@ -56,6 +57,13 @@ def load_config(path: Path) -> dict:
     conf["val"] = {**DEFAULT_VAL, **(conf.get("val") or {})}
     conf.setdefault("mlflow", True)
     return conf
+
+
+def val_params(conf: Mapping) -> "InferenceParams":
+    """Inference params to score val regions; configs stored before ``window_m`` existed get its default."""
+    from fair_trees.params import parse_inference_params
+
+    return parse_inference_params({"window_m": conf["val"].get("window_m", DEFAULT_VAL["window_m"])})
 
 
 def repo_sha() -> str:
@@ -200,6 +208,7 @@ def main(
         out_dir=out_dir,
         on_epoch_end=on_epoch_end,
         val_zooms=tuple(conf["val"]["zooms"]),
+        val_params=val_params(conf),
         num_workers=num_workers,
         tmp_dir=tmp_dir,
         repo_sha=sha,
@@ -255,7 +264,6 @@ def evaluate(
     """Score a run on its val regions and on the frozen NEON benchmark parts; writes ``eval.json``."""
     from experiments.neon_eval import DF_COMPAT
     from fair_trees.evaluate import evaluate_regions, evaluate_units
-    from fair_trees.params import InferenceParams
 
     out_dir = Path(drive_root) / "runs" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -267,7 +275,7 @@ def evaluate(
     run_fn = _run_fn(weights, device)
 
     _, val = _regions(conf, data_root)
-    parts = {"val": _with_ci(evaluate_regions(run_fn, val, InferenceParams(), zooms=conf["val"]["zooms"]))}
+    parts = {"val": _with_ci(evaluate_regions(run_fn, val, val_params(conf), zooms=conf["val"]["zooms"]))}
     for name, part, units in _benchmark_parts(benchmark, data_root):
         report = evaluate_units(run_fn, units, DF_COMPAT, ignore=False)
         lower = float(part["release_f1_ci95"][0])

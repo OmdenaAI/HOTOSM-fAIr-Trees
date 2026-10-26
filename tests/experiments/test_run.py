@@ -109,6 +109,41 @@ def test_main_writes_run_files_and_calls_train(monkeypatch, setup, tmp_path):
     assert json.loads((drive / "runs" / "r2" / "config.json").read_text())["parsed"]["learning_rate"] == 0.002
 
 
+def test_main_passes_the_val_window_to_train(monkeypatch, setup, tmp_path):
+    data, drive, config, _ = setup
+    kw = dict(drive_root=drive, data_root=data, tmp_dir=tmp_path / "tmp")
+    assert _rerun(monkeypatch, config, "r1", kw)["val_params"].window_m == 40.0
+    config.write_text(CONFIG.replace("max_regions: null", "max_regions: null, window_m: 60"))
+    calls = _rerun(monkeypatch, config, "r2", kw)
+    assert calls["val_params"].window_m == 60.0
+
+
+def test_load_config_validates_the_val_window(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(CONFIG.replace("max_regions: null", "max_regions: null, window_m: 1000"))
+    conf = run.load_config(p)
+    with pytest.raises(ValueError, match="window_m"):
+        run.val_params(conf)
+
+
+def test_evaluate_scores_val_with_the_configured_window(monkeypatch, setup, fake_session):
+    data, drive, config, bench = setup
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+    import fair_trees.evaluate as ev
+
+    windows = []
+    real = ev.evaluate_regions
+    monkeypatch.setattr(
+        ev,
+        "evaluate_regions",
+        lambda fn, val, params, **k: windows.append(params.window_m) or real(fn, val, params, **k),
+    )
+    run.evaluate("r1", bench, drive_root=drive, data_root=data)  # stored config: no window_m
+    config.write_text(CONFIG.replace("max_regions: null", "max_regions: null, window_m: 60"))
+    run.evaluate("r1", bench, drive_root=drive, data_root=data, config=config)
+    assert windows == [40.0, 60.0]
+
+
 def _rerun(monkeypatch, config, run_id, kw, **main_kw):
     """Run `main` again and return the keyword arguments it passed to train."""
     calls = {}

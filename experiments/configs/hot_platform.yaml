@@ -18,4 +18,5 @@ hyperparameters:
 val:
   zooms: [20, 19]
   max_regions: null
+  window_m: 60                    # 60 m windows scored best on HOT val (40 m is the default)
 mlflow: true
