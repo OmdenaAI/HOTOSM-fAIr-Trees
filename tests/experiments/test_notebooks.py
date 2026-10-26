@@ -51,6 +51,8 @@ REQUIRED = {
         "sweep",
         "choose",
         "score_test",
+        "groups_40_all",
+        "DRIVE_RESULTS",
         "masking_cost",
         "audit_table",
         "flush_and_unmount",
