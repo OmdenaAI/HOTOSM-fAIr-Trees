@@ -16,7 +16,7 @@ from PIL import Image
 from rasterio.features import rasterize
 
 from experiments.label_study.audit import label_table, region_table
-from fair_trees.georef import mercator_y_to_lat, parse_oam_name, tile_bounds_3857
+from fair_trees.georef import mercator_y_to_lat, parse_oam_name
 from fair_trees.preprocess import Mosaic, mosaic_chips, tile_groups
 
 REPO_ID = "hotosm/fAIr-guru-td-trees"
@@ -24,6 +24,8 @@ REVISION = "v0.1.0"
 UTM = "EPSG:32628"
 # diameter_crown typos reach 25,231 m; one such square covers the city and chains every tree into one cluster
 MAX_DIAMETER_M = 30.0
+TILE_PX = 256  # side of a HOT tile
+KEPT_FORMATS = {"PNG": ".png", "JPEG": ".jpg"}  # tile formats written to the chips unchanged
 
 
 def parse_diameter(value) -> float:
@@ -32,6 +34,11 @@ def parse_diameter(value) -> float:
         return np.nan
     m = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*(?:m|M|metres|meters)?\s*", value)
     return float(m.group(1).replace(",", ".")) if m else np.nan
+
+
+def known_diameter(diameter_m: pd.Series) -> pd.Series:
+    """Crown diameters with those outside (0, MAX_DIAMETER_M] set to NaN, like a missing one."""
+    return diameter_m.where((diameter_m > 0) & (diameter_m <= MAX_DIAMETER_M))
 
 
 @dataclass(frozen=True, eq=False)
@@ -90,8 +97,7 @@ def hot_labels(data: HotData) -> tuple[pd.DataFrame, pd.DataFrame]:
     groups = data.groups.to_crs(UTM)
     tiles = data.tiles.to_crs(UTM)
 
-    diameter = trees["diameter_m"].where((trees["diameter_m"] > 0) & (trees["diameter_m"] <= MAX_DIAMETER_M))
-    x, y, half = trees.geometry.x, trees.geometry.y, diameter / 2
+    x, y, half = trees.geometry.x, trees.geometry.y, known_diameter(trees["diameter_m"]) / 2
     tree_rows = label_table("hot", trees["split"].to_numpy(), "tree", x - half, y - half, x + half, y + half)
     points = gpd.GeoDataFrame(geometry=groups.geometry.representative_point(), crs=UTM)
     under = points.sjoin(tiles[["split", "geometry"]], predicate="intersects")
@@ -117,15 +123,19 @@ def split_units(tiles: gpd.GeoDataFrame, split: str, block_tiles: int = 16) -> l
 
 
 def unit_mosaic(images: Mapping[str, bytes], tile_ids: Sequence[str], workdir: Path) -> Mosaic:
-    """Stitch a unit's tiles into one mosaic; ``workdir`` is created fresh to hold the PNG chips."""
+    """Stitch a unit's tiles into one mosaic; ``workdir`` is created fresh to hold the chips.
+
+    RGB and RGBA tiles in a kept format are written unchanged; any other tile is re-encoded as PNG.
+    """
     workdir.mkdir(parents=True)
     paths = []
     for tile_id in tile_ids:
-        path = workdir / f"{tile_id}.png"
         image = Image.open(io.BytesIO(images[tile_id]))
-        if image.format == "PNG" and image.mode in ("RGB", "RGBA"):
+        if image.format in KEPT_FORMATS and image.mode in ("RGB", "RGBA"):
+            path = workdir / f"{tile_id}{KEPT_FORMATS[image.format]}"
             path.write_bytes(images[tile_id])
         else:
+            path = workdir / f"{tile_id}.png"
             transparent = image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info
             image.convert("RGBA" if transparent else "RGB").save(path, format="PNG")
         paths.append(path)
@@ -140,15 +150,24 @@ class UnitTruth:
     tree_points: np.ndarray  # (P, 2) mosaic px (x, y), trees outside groups, ordered by osm_id
     tree_diam_px: np.ndarray  # (P,) crown diameter in mosaic px, NaN where unknown
     group_boxes: np.ndarray  # (G, 4) mosaic px (x0, y0, x1, y1), one per group part clipped to the unit
+    group_area_m2: np.ndarray  # (G,) ground area of each clipped part
+    group_edge: np.ndarray  # (G,) bool, the clipped part touches the unit's boundary
     group_mask: np.ndarray  # (H, W) bool, pixels inside a group
     group_cover: float  # share of the unit's tile area inside groups
+    tile_cover: np.ndarray  # (H / TILE_PX, W / TILE_PX) float32, each tile's share in groups, 0 off the unit
 
 
 def unit_truth(data: HotData, mosaic: Mosaic, tile_ids: Sequence[str]) -> UnitTruth:
     """HOT's trees and tree groups in the pixels of a unit's mosaic."""
     to_px = ~mosaic.transform_3857
-    squares = [shapely.box(*tile_bounds_3857(*parse_oam_name(f"{t}.png"))) for t in tile_ids]
-    unit = shapely.union_all(squares)
+    # tile squares from the mosaic's pixel grid share exact edges; tile_bounds_3857 leaves ~1e-9 m gaps
+    # between neighbours, which would split every group crossing a tile seam and put a boundary there
+    xyz = np.array([parse_oam_name(f"{t}.png") for t in tile_ids])
+    cols, rows = (xyz[:, :2] - xyz[:, :2].min(axis=0)).T * TILE_PX
+    squares = shapely.box(cols, rows, cols + TILE_PX, rows + TILE_PX)
+    unit = shapely.union_all(
+        shapely.transform(squares, lambda c: np.column_stack(mosaic.transform_3857 @ (c[:, 0], c[:, 1])))
+    )
 
     groups = data.groups.to_crs("EPSG:3857").geometry
     groups = groups[groups.sindex.query(unit, predicate="intersects")]
@@ -160,13 +179,26 @@ def unit_truth(data: HotData, mosaic: Mosaic, tile_ids: Sequence[str]) -> UnitTr
     xs, ys = to_px @ (trees.geometry.x.to_numpy(), trees.geometry.y.to_numpy())
     # a diameter in metres on the ground is 1 / cos(lat) longer in Web Mercator
     lat = mercator_y_to_lat(mosaic.transform_3857.f - mosaic.rgb.shape[0] / 2 * mosaic.transform_3857.a)
-    diam_px = trees["diameter_m"].to_numpy(float) / math.cos(math.radians(lat)) / mosaic.transform_3857.a
+    diameter = known_diameter(trees["diameter_m"]).to_numpy(float)
+    diam_px = diameter / math.cos(math.radians(lat)) / mosaic.transform_3857.a
 
     clipped = shapely.get_parts(groups.intersection(unit).to_numpy())
     clipped = clipped[shapely.area(clipped) > 0]  # drop empties and the lines or points of mere edge contact
     cover = float(shapely.union_all(clipped).area / unit.area)
+    # clipping puts vertices on the boundary up to rounding: a hundredth of a pixel counts as touching
+    edge = shapely.dwithin(clipped, unit.boundary, 0.01 * mosaic.transform_3857.a)
     clipped = shapely.transform(clipped, lambda c: np.column_stack(to_px @ (c[:, 0], c[:, 1])))
     mask = np.zeros(mosaic.rgb.shape[:2], dtype=bool)
     if len(clipped):
         mask = rasterize(clipped, out_shape=mask.shape, fill=0, default_value=1, dtype="uint8").astype(bool)
-    return UnitTruth(np.column_stack([xs, ys]), diam_px, shapely.bounds(clipped).reshape(-1, 4), mask, cover)
+    tiles = mask.reshape(mask.shape[0] // TILE_PX, TILE_PX, mask.shape[1] // TILE_PX, TILE_PX)
+    return UnitTruth(
+        tree_points=np.column_stack([xs, ys]),
+        tree_diam_px=diam_px,
+        group_boxes=shapely.bounds(clipped).reshape(-1, 4),
+        group_area_m2=shapely.area(clipped) * mosaic.gsd_m**2,
+        group_edge=edge,
+        group_mask=mask,
+        group_cover=cover,
+        tile_cover=tiles.mean(axis=(1, 3), dtype=np.float32),
+    )

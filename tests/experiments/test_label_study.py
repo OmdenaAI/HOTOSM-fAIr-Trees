@@ -1,3 +1,5 @@
+import dataclasses
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -48,7 +50,14 @@ def _build(offset):
         mask[:, 30:] = True
         mosaic = Mosaic(np.zeros((20, 40, 3), np.uint8), np.ones((20, 40), bool), None, 18, GSD)
         truth = UnitTruth(
-            np.array([[5.0 + offset, 5.0]]), np.array([4.0]), np.array([[30.0, 0, 40, 20]]), mask, 0.25
+            tree_points=np.array([[5.0 + offset, 5.0]]),
+            tree_diam_px=np.array([4.0]),
+            group_boxes=np.array([[30.0, 0, 40, 20]]),
+            group_area_m2=np.array([200 * GSD**2]),
+            group_edge=np.array([True]),
+            group_mask=mask,
+            group_cover=0.25,
+            tile_cover=np.array([[0.25]], np.float32),
         )
         return mosaic, truth
 
@@ -57,7 +66,7 @@ def _build(offset):
 
 def test_make_record_flags_boxes_in_groups_and_dense():
     mosaic, truth = _build(0)()
-    truth = UnitTruth(truth.tree_points, truth.tree_diam_px, truth.group_boxes, truth.group_mask, 0.3)
+    truth = dataclasses.replace(truth, group_cover=0.3)
     dets = Detections(
         np.array([[0, 0, 10, 10], [28, 4, 38, 14]], np.float32), np.array([0.9, 0.9], np.float32)
     )

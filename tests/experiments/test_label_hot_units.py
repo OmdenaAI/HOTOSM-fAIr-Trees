@@ -25,9 +25,9 @@ def tiles_at(xys):
     )
 
 
-def png_bytes(mode="RGB"):
+def png_bytes(mode="RGB", fmt="PNG"):
     buf = io.BytesIO()
-    Image.new(mode, (256, 256), (90, 120, 60, 255)[: len(mode)]).save(buf, format="PNG")
+    Image.new(mode, (256, 256), (90, 120, 60, 255)[: len(mode)]).save(buf, format=fmt)
     return buf.getvalue()
 
 
@@ -76,6 +76,14 @@ def test_unit_mosaic_stitches_the_tiles(tmp_path):
     assert m.rgb.shape == (512, 512, 3) and m.z == 20
 
 
+def test_jpeg_tiles_are_written_unchanged_as_jpg(tmp_path):
+    jpegs = {tile_id: png_bytes(fmt="JPEG") for tile_id in TILE_IDS}
+    m = unit_mosaic(jpegs, TILE_IDS, tmp_path / "u")
+    written = sorted((tmp_path / "u").iterdir())
+    assert [p.name for p in written] == sorted(f"{t}.jpg" for t in TILE_IDS)
+    assert all(p.read_bytes() == jpegs[p.stem] for p in written) and m.rgb.shape == (512, 512, 3)
+
+
 def test_truth_points_land_on_their_pixel_and_skip_trees_in_groups(tmp_path):
     m = unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u")
     t = unit_truth(hot_data(), m, TILE_IDS)
@@ -87,15 +95,38 @@ def test_truth_points_land_on_their_pixel_and_skip_trees_in_groups(tmp_path):
 
 
 def test_group_box_is_clipped_to_the_unit(tmp_path):
-    t = unit_truth(hot_data(), unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u"), TILE_IDS)
+    m = unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u")
+    t = unit_truth(hot_data(), m, TILE_IDS)
     assert t.group_boxes.shape == (1, 4) and t.group_boxes.min() >= 0 and t.group_boxes.max() <= 512
     assert t.group_mask[64, 64] and not t.group_mask[400, 400]
     assert 0.12 < t.group_cover < 0.13
+    # the group crosses the unit's west edge: the clipped part is the west half of the top-left tile
+    assert t.group_edge.tolist() == [True]
+    assert np.allclose(t.group_area_m2, [128 * 256 * m.gsd_m**2], rtol=1e-3)
+    assert t.tile_cover.dtype == np.float32 and np.allclose(t.tile_cover, [[0.5, 0], [0, 0]], atol=0.01)
+
+
+def test_tile_cover_is_zero_off_the_unit(tmp_path):
+    tile_ids = TILE_IDS[:3]  # an L of three tiles; the bottom-right square of the mosaic is not in the unit
+    west, south, east, north = tile_bounds_4326(X0, Y0, 20)
+    data = with_groups([box(west, south - 2 * (north - south), east + (east - west), north)])  # all four
+    t = unit_truth(data, unit_mosaic(IMAGES, tile_ids, tmp_path / "u"), tile_ids)
+    assert np.allclose(t.tile_cover, [[1, 1], [1, 0]], atol=0.01)
 
 
 def test_unit_without_labels(tmp_path):
     t = unit_truth(hot_data(with_labels=False), unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u"), TILE_IDS)
     assert t.tree_points.shape == (0, 2) and t.group_boxes.shape == (0, 4) and t.group_cover == 0.0
+    assert t.group_area_m2.shape == (0,) and t.group_edge.shape == (0,) and not t.tile_cover.any()
+
+
+def test_crown_diameters_outside_0_to_30_m_are_unknown(tmp_path):
+    data = hot_data()
+    trees = data.trees.assign(diameter_m=[40.0, 2.0, 0.0])  # 40 m on tree 1, 0 m on tree 3
+    t = unit_truth(
+        HotData(trees, data.groups, data.tiles), unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u"), TILE_IDS
+    )
+    assert np.isnan(t.tree_diam_px).all()
 
 
 def with_groups(geoms):
@@ -120,3 +151,14 @@ def test_group_clip_with_a_polygon_and_a_line_keeps_the_polygon(tmp_path):
     t = unit_truth(data, unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u"), TILE_IDS)
     assert t.group_boxes.shape == (1, 4)
     assert np.allclose(t.group_boxes[0], [64, 128, 128, 192], atol=0.5)
+
+
+def test_interior_group_does_not_touch_the_edge(tmp_path):
+    # it crosses the seam between the top two tiles and stays one part
+    west, south, east, north = tile_bounds_4326(X0, Y0, 20)
+    w, h = east - west, north - south
+    data = with_groups([box(west + 0.25 * w, south + 0.25 * h, east + 0.5 * w, south + 0.5 * h)])
+    m = unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u")
+    t = unit_truth(data, m, TILE_IDS)
+    assert t.group_edge.tolist() == [False]
+    assert np.allclose(t.group_area_m2, [320 * 64 * m.gsd_m**2], rtol=1e-3)
