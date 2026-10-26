@@ -5,3 +5,4 @@ shapely
 geopandas
 deepforest==2.1.0
 pyyaml
+pyarrow
