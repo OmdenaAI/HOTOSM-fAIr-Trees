@@ -2,6 +2,7 @@ import json
 import shutil
 
 import pytest
+from PIL import Image
 
 from experiments.shards import manifest_hash, stage_shards, write_shards
 from fair_trees.dataset import load_regions
@@ -70,3 +71,16 @@ def test_stage_shards_rejects_a_corrupt_shard(source_root, tmp_path):
         stage_shards(drive, tmp_path / "data", ["neon"])
     # the manifest is written last, so an interrupted stage does not look complete
     assert not (tmp_path / "data" / "neon" / "manifest.json").exists()
+
+
+def test_png_chips_are_packed_staged_and_loaded(write_region, tmp_path):
+    root = tmp_path / "regions"
+    write_region("h", tiles=((0, 0),), root=root)
+    (tif,) = (root / "h" / "z20" / "chips").glob("*.tif")
+    Image.new("RGB", (256, 256), (90, 120, 60)).save(tif.with_suffix(".png"))
+    tif.unlink()
+    drive, local = tmp_path / "drive", tmp_path / "data"
+    write_shards(root, drive / "shards" / "hot", source="hot", converter_sha="abc")
+    stage_shards(drive, local, ["hot"])
+    (region,) = load_regions(local / "hot")
+    assert [p.suffix for p in region.chips[20]] == [".png"]
