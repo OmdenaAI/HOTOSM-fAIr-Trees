@@ -15,6 +15,29 @@ def test_matching_maximises_pairs():
     assert sorted(match_points(boxes, np.array([[5, 5], [1, 1]], float))) == [(0, 1), (1, 0)]
 
 
+def brute_force_match(boxes, points):
+    """match_points on the full box x point cost matrix."""
+    from scipy.optimize import linear_sum_assignment
+
+    x, y = points[None, :, 0], points[None, :, 1]
+    inside = (x >= boxes[:, None, 0]) & (x <= boxes[:, None, 2]) & (y >= boxes[:, None, 1])
+    inside &= y <= boxes[:, None, 3]
+    centres = (boxes[:, :2] + boxes[:, 2:]) / 2
+    dist = np.linalg.norm(centres[:, None, :] - points[None, :, :], axis=2)
+    diagonal = np.linalg.norm(boxes[:, 2:] - boxes[:, :2], axis=1)
+    rows, cols = linear_sum_assignment(np.where(inside, dist / (diagonal[:, None] + 1), 1e6))
+    return sorted((int(r), int(c)) for r, c in zip(rows, cols, strict=True) if inside[r, c])
+
+
+def test_matching_equals_the_full_cost_matrix():
+    rng = np.random.default_rng(0)
+    corner = rng.uniform(0, 300, (200, 2))
+    boxes = np.hstack([corner, corner + rng.uniform(5, 30, (200, 2))])
+    points = rng.uniform(0, 330, (200, 2))
+    pairs = match_points(boxes, points)
+    assert len(pairs) > 50 and pairs == brute_force_match(boxes, points)
+
+
 def test_boxes_in_groups_are_ignored_not_false_positives():
     boxes = np.array([[0, 0, 4, 4], [10, 10, 14, 14]], float)
     c = score_trees(boxes, np.array([False, True]), np.array([[2, 2]], float))
