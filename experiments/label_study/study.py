@@ -25,8 +25,8 @@ from fair_trees.preprocess import Mosaic
 
 GRID = {
     "score": (0.1, 0.2, 0.3, 0.4, 0.5),
-    "gap_m": (0.0, 0.5, 1.0, 2.0),
-    "min_crowns": (2, 3, 4, 5, 6, 8),
+    "gap_m": (0.0, 0.5, 1.0, 2.0, 3.0, 4.0, 6.0),
+    "min_crowns": (2, 3, 4, 5, 6, 8, 10, 12, 16),
 }
 DENSE_COVER = 0.3  # a tile is dense when this share of it lies inside groups
 # an edge-clipped group part below this ground area is an ignore region: no cluster of crowns can match it
@@ -236,6 +236,54 @@ def choose(table: pd.DataFrame) -> dict:
         "score": float(best["score"]),
         "gap_m": float(best["gap_m"]),
         "min_crowns": int(best["min_crowns"]),
+    }
+
+
+def _unit_counts(records: Mapping[str, UnitRecord], ids: Sequence[str], setting: Mapping) -> np.ndarray:
+    """Per-unit (tp, fp, fn) for trees and groups at 0.4, shape (units, 2, 3)."""
+    out = np.zeros((len(ids), 2, 3))
+    for i, unit_id in enumerate(ids):
+        s = score_record(records[unit_id], setting["score"], setting["gap_m"], setting["min_crowns"])
+        out[i] = [[c.tp, c.fp, c.fn] for c in (s.trees, s.groups_40)]
+    return out
+
+
+def _mean_f1(counts: np.ndarray) -> np.ndarray:
+    """Mean of tree F1 and group F1 from counts summed over axis -3; 0 where F1 is undefined."""
+    tp, fp, fn = counts[..., 0], counts[..., 1], counts[..., 2]
+    denom = 2 * tp + fp + fn
+    f1 = np.divide(2 * tp, denom, out=np.zeros_like(denom), where=denom > 0)
+    return f1.mean(axis=-1)
+
+
+def compare_settings(
+    a: Sequence[UnitRecord],
+    setting_a: Mapping,
+    b: Sequence[UnitRecord],
+    setting_b: Mapping,
+    *,
+    n: int = 1000,
+    seed: int = 0,
+) -> dict:
+    """Paired bootstrap over units of mean F1 (b minus a); a and b must cover the same units."""
+    by_a = {r.unit_id: r for r in a}
+    by_b = {r.unit_id: r for r in b}
+    if by_a.keys() != by_b.keys():
+        raise ValueError("a and b must cover the same units")
+    ids = sorted(by_a)
+    counts_a = _unit_counts(by_a, ids, setting_a)
+    counts_b = _unit_counts(by_b, ids, setting_b)
+    mean_a = float(_mean_f1(counts_a.sum(axis=0)))
+    mean_b = float(_mean_f1(counts_b.sum(axis=0)))
+    draws = np.random.default_rng(seed).integers(0, len(ids), (n, len(ids)))
+    diffs = _mean_f1(counts_b[draws].sum(axis=1)) - _mean_f1(counts_a[draws].sum(axis=1))
+    lo, hi = np.percentile(diffs, [2.5, 97.5])
+    return {
+        "units": len(ids),
+        "mean_f1_a": mean_a,
+        "mean_f1_b": mean_b,
+        "diff": mean_b - mean_a,
+        "ci": [float(lo), float(hi)],
     }
 
 
