@@ -56,6 +56,14 @@ REQUIRED = {
         "masking_cost",
         "audit_table",
         "flush_and_unmount",
+        "MODEL",
+        "WINDOWS_M",
+        "window_m=",
+        "compare_settings",
+        "window_check.json",
+        "cache-release-40m",
+        "RUN_AUDIT",
+        'MODEL != "release"',
     ],
 }
 
