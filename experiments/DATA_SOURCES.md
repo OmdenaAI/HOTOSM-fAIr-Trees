@@ -82,3 +82,30 @@ ground area is closest to 15%.
 - Shard manifest sha256 `5bbeca8e879491ed5835c137dca01dcc52870d0d6623d2152217342772d9b428`.
 - Drive-to-`/content` copy of `z20-0000.tar`: 97.6 MB/s (an earlier conversion measured 307.5 MB/s); restaging all
   shards takes well under 10 minutes.
+
+## HOT Freetown trees on Drive (Colab conversion)
+
+Written by `experiments/notebooks/colab_convert_hot.ipynb` to `MyDrive/fair_trees/shards/hot/`.
+
+| Item | URL | Revision | Licence |
+|---|---|---|---|
+| `hotosm/fAIr-guru-td-trees` (labels, tile table and image parquets, read through `huggingface_hub`) | https://huggingface.co/datasets/hotosm/fAIr-guru-td-trees | `v0.1.0` | imagery CC-BY-4.0, labels ODbL-1.0 (dataset card) |
+
+Files used: `stac/project-50661/labels.parquet`, `stac/project-50661/tiles.parquet`, `data/train-00000-of-00002.parquet`,
+`data/train-00001-of-00002.parquet` and `data/validation-00000-of-00001.parquet`. The biome comes from the RESOLVE
+shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
+
+### What is converted
+
+- **Splits.** Only HOT `train` (as `train`) and `validation` (as `val`). HOT `test` is never converted; the label study
+  reads it straight from Hugging Face.
+- **Regions.** One region per connected run of tiles in a 16 x 16-tile block, since a whole split is larger than the
+  mosaic limit. Each region keeps its chips (PNG or JPEG as stored) and its own `labels.geojson` and `ignore.geojson`;
+  every feature that touches the region's tiles is written, so a crown cut by a block edge is labelled on both sides.
+- **Labels.** A tree outside every `tree_group` with a known diameter (0 to 30 m) becomes a square of that side
+  centred on the point (built in UTM 28N, stored in EPSG:4326).
+- **Ignore.** Every `tree_group` polygon, plus a 4 m square around each tree with an unknown diameter that is not in a
+  group. Trees inside a group get nothing, as the group already masks them. A crown from the other split that reaches
+  into a region is masked there, never labelled.
+- **No split buffer.** HOT's split leaves no gap between train and val, so crowns and imagery can sit next to each other
+  across the boundary; the other-split masking above is the only guard.

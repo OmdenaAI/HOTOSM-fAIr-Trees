@@ -75,7 +75,7 @@ def test_load_config_validates(tmp_path):
         run.load_config(p)
 
 
-@pytest.mark.parametrize("name", ["neon_platform.yaml", "neon_resume_check.yaml"])
+@pytest.mark.parametrize("name", ["neon_platform.yaml", "neon_resume_check.yaml", "hot_platform.yaml"])
 def test_shipped_configs_parse(name):
     conf = run.load_config(Path(run.__file__).parent / "configs" / name)
     parse_train_params(conf["hyperparameters"])
