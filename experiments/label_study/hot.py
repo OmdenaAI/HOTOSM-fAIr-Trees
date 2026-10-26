@@ -22,6 +22,8 @@ from fair_trees.preprocess import Mosaic, mosaic_chips, tile_groups
 REPO_ID = "hotosm/fAIr-guru-td-trees"
 REVISION = "v0.1.0"
 UTM = "EPSG:32628"
+# diameter_crown typos reach 25,231 m; one such square covers the city and chains every tree into one cluster
+MAX_DIAMETER_M = 30.0
 
 
 def parse_diameter(value) -> float:
@@ -79,15 +81,17 @@ def masking_cost(data: HotData, split: str = "train") -> dict:
 
 
 def hot_labels(data: HotData) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """HOT as audit tables: one region per split, trees as squares of their crown diameter (NaN if unknown).
+    """HOT as audit tables: one region per split, trees as squares of their crown diameter.
 
-    A group belongs to the split of the tile under its representative point.
+    A diameter outside (0, MAX_DIAMETER_M] counts as unknown, like a missing one: the tree is kept, with NaN
+    size. A group belongs to the split of the tile under its representative point.
     """
     trees = data.trees.to_crs(UTM)
     groups = data.groups.to_crs(UTM)
     tiles = data.tiles.to_crs(UTM)
 
-    x, y, half = trees.geometry.x, trees.geometry.y, trees["diameter_m"] / 2
+    diameter = trees["diameter_m"].where((trees["diameter_m"] > 0) & (trees["diameter_m"] <= MAX_DIAMETER_M))
+    x, y, half = trees.geometry.x, trees.geometry.y, diameter / 2
     tree_rows = label_table("hot", trees["split"].to_numpy(), "tree", x - half, y - half, x + half, y + half)
     points = gpd.GeoDataFrame(geometry=groups.geometry.representative_point(), crs=UTM)
     under = points.sjoin(tiles[["split", "geometry"]], predicate="intersects")

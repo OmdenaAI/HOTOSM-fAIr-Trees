@@ -125,6 +125,14 @@ def test_hot_labels_keep_trees_without_diameter(hot_data_one_tree_without_diamet
     assert (labels.cls == "tree").sum() == 1 and labels.w_m.isna().all()
 
 
+def test_hot_labels_treat_implausible_diameters_as_unknown():
+    data = hot_data()
+    trees = pd.concat([data.trees] * 2, ignore_index=True).assign(diameter_m=[4.0, 25_000.0])
+    labels, _ = hot_labels(HotData(trees=trees, groups=data.groups, tiles=data.tiles))
+    assert labels.w_m.iloc[0] == pytest.approx(4.0)
+    assert np.isnan(labels.w_m.iloc[1]) and np.isnan(labels.h_m.iloc[1])  # a typo, kept for the counts
+
+
 def test_neon_labels(tmp_path):  # tiny 20x10 tif + VOC xml with one 10x5 px box
     tif, xml = tmp_path / "scene.tif", tmp_path / "scene.xml"
     meta = {"driver": "GTiff", "width": 20, "height": 10, "count": 3, "dtype": "uint8", "crs": "EPSG:32617"}
