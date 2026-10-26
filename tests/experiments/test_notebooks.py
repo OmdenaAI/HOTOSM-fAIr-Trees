@@ -38,6 +38,25 @@ REQUIRED = {
         "run.compare_runs",
         "flush_and_unmount",
     ],
+    "label_study.ipynb": [
+        "REPO_SHA",
+        "drive.mount",
+        "git clone",
+        "GITHUB_TOKEN",
+        "[train,test]",
+        "NEON.pt",
+        "read_hot",
+        "split_units",
+        "run_units",
+        "sweep",
+        "choose",
+        "score_test",
+        "groups_40_all",
+        "DRIVE_RESULTS",
+        "masking_cost",
+        "audit_table",
+        "flush_and_unmount",
+    ],
 }
 
 

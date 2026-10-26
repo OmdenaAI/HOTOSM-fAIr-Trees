@@ -17,4 +17,4 @@ jobs:
       - run: uv sync --locked --extra train --extra test
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run --with pyyaml pytest -q
+      - run: uv run --with pyyaml --with geopandas pytest -q
