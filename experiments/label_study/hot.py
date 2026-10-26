@@ -15,6 +15,7 @@ import shapely
 from PIL import Image
 from rasterio.features import rasterize
 
+from experiments.label_study.audit import label_table, region_table
 from fair_trees.georef import mercator_y_to_lat, parse_oam_name, tile_bounds_3857
 from fair_trees.preprocess import Mosaic, mosaic_chips, tile_groups
 
@@ -75,6 +76,28 @@ def masking_cost(data: HotData, split: str = "train") -> dict:
         "trees_total": len(trees),
         "trees_in_groups": len(np.unique(parts.sindex.query(trees.geometry, predicate="within")[0])),
     }
+
+
+def hot_labels(data: HotData) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """HOT as audit tables: one region per split, trees as squares of their crown diameter (NaN if unknown).
+
+    A group belongs to the split of the tile under its representative point.
+    """
+    trees = data.trees.to_crs(UTM)
+    groups = data.groups.to_crs(UTM)
+    tiles = data.tiles.to_crs(UTM)
+
+    x, y, half = trees.geometry.x, trees.geometry.y, trees["diameter_m"] / 2
+    tree_rows = label_table("hot", trees["split"].to_numpy(), "tree", x - half, y - half, x + half, y + half)
+    points = gpd.GeoDataFrame(geometry=groups.geometry.representative_point(), crs=UTM)
+    under = points.sjoin(tiles[["split", "geometry"]], predicate="intersects")
+    split = under[~under.index.duplicated()]["split"].reindex(groups.index)  # a point on a tile edge: first
+    group_rows = label_table(
+        "hot", split.to_numpy(), "group", *groups.geometry.bounds.to_numpy().T, groups.area
+    )
+
+    area = tiles.geometry.area.groupby(tiles["split"]).sum()
+    return pd.concat([tree_rows, group_rows], ignore_index=True), region_table("hot", area.index, area)
 
 
 def split_units(tiles: gpd.GeoDataFrame, split: str, block_tiles: int = 16) -> list[tuple[str, list[str]]]:
