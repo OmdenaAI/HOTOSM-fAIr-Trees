@@ -136,7 +136,7 @@ def unit_truth(data: HotData, mosaic: Mosaic, tile_ids: Sequence[str]) -> UnitTr
     diam_px = trees["diameter_m"].to_numpy(float) / math.cos(math.radians(lat)) / mosaic.transform_3857.a
 
     clipped = shapely.get_parts(groups.intersection(unit).to_numpy())
-    clipped = clipped[~shapely.is_empty(clipped)]
+    clipped = clipped[shapely.area(clipped) > 0]  # drop empties and the lines or points of mere edge contact
     cover = float(shapely.union_all(clipped).area / unit.area)
     clipped = shapely.transform(clipped, lambda c: np.column_stack(to_px @ (c[:, 0], c[:, 1])))
     mask = np.zeros(mosaic.rgb.shape[:2], dtype=bool)

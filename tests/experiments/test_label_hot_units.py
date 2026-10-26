@@ -5,7 +5,7 @@ import geopandas as gpd
 import numpy as np
 import pytest
 from PIL import Image
-from shapely.geometry import Point, box
+from shapely.geometry import MultiPolygon, Point, box
 
 from experiments.label_study.hot import HotData, split_units, unit_mosaic, unit_truth
 from fair_trees.georef import mercator_y_to_lat, tile_bounds_4326
@@ -96,3 +96,27 @@ def test_group_box_is_clipped_to_the_unit(tmp_path):
 def test_unit_without_labels(tmp_path):
     t = unit_truth(hot_data(with_labels=False), unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u"), TILE_IDS)
     assert t.tree_points.shape == (0, 2) and t.group_boxes.shape == (0, 4) and t.group_cover == 0.0
+
+
+def with_groups(geoms):
+    data = hot_data(with_labels=False)
+    groups = gpd.GeoDataFrame({"osm_id": range(len(geoms))}, geometry=geoms, crs="EPSG:4326")
+    return HotData(trees=data.trees, groups=groups, tiles=data.tiles)
+
+
+def test_group_touching_only_the_unit_edge_leaves_no_trace(tmp_path):
+    west, south, east, north = tile_bounds_4326(X0, Y0, 20)
+    data = with_groups([box(west - (east - west), south, west, north)])
+    t = unit_truth(data, unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u"), TILE_IDS)
+    assert t.group_boxes.shape == (0, 4) and not t.group_mask.any() and t.group_cover == 0.0
+
+
+def test_group_clip_with_a_polygon_and_a_line_keeps_the_polygon(tmp_path):
+    west, south, east, north = tile_bounds_4326(X0, Y0, 20)
+    w, h = east - west, north - south
+    inside = box(west + 0.25 * w, south + 0.25 * h, west + 0.5 * w, south + 0.5 * h)
+    touching = box(west - w, south, west, north)  # meets the unit along its west edge only
+    data = with_groups([MultiPolygon([inside, touching])])
+    t = unit_truth(data, unit_mosaic(IMAGES, TILE_IDS, tmp_path / "u"), TILE_IDS)
+    assert t.group_boxes.shape == (1, 4)
+    assert np.allclose(t.group_boxes[0], [64, 128, 128, 192], atol=0.5)
