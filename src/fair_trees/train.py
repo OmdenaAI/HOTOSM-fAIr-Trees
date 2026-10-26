@@ -392,7 +392,8 @@ def train(
     """
     if not train_regions:
         raise ValueError("no train regions")
-    val_params = val_params or InferenceParams()
+    if val_params is None:
+        val_params = InferenceParams()
     out_dir = Path(out_dir)
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     model = build_model(weights, trainable_layers=cfg.trainable_layers).to(device).train()

@@ -59,11 +59,17 @@ def load_config(path: Path) -> dict:
     return conf
 
 
+def _stored_config(path: Path) -> dict:
+    """The ``config`` of a run's config.json, with val defaults added that it predates (e.g. ``window_m``)."""
+    conf = json.loads(Path(path).read_text())["config"]
+    return {**conf, "val": {**DEFAULT_VAL, **conf.get("val", {})}}
+
+
 def val_params(conf: Mapping) -> "InferenceParams":
-    """Inference params to score val regions; configs stored before ``window_m`` existed get its default."""
+    """Inference params to score val regions with the configured window."""
     from fair_trees.params import parse_inference_params
 
-    return parse_inference_params({"window_m": conf["val"].get("window_m", DEFAULT_VAL["window_m"])})
+    return parse_inference_params({"window_m": conf["val"]["window_m"]})
 
 
 def repo_sha() -> str:
@@ -125,7 +131,7 @@ def _run_changes(
     if config_path.exists():
         stored = json.loads(config_path.read_text())
         # round-tripped through json like the stored copy
-        if stored["config"] != json.loads(json.dumps(conf)):
+        if _stored_config(config_path) != json.loads(json.dumps(conf)):
             changed.append("the config")
         if stored["parsed"] != parsed:
             changed.append("the parsed hyperparameters")
@@ -270,7 +276,7 @@ def evaluate(
     if config is not None:
         conf = load_config(config)
     else:
-        conf = json.loads((out_dir / "config.json").read_text())["config"]
+        conf = _stored_config(out_dir / "config.json")
     weights = Path(weights) if weights is not None else out_dir / "best.pt"
     run_fn = _run_fn(weights, device)
 

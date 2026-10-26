@@ -118,6 +118,20 @@ def test_main_passes_the_val_window_to_train(monkeypatch, setup, tmp_path):
     assert calls["val_params"].window_m == 60.0
 
 
+def test_stored_config_without_the_val_window_is_not_a_change(monkeypatch, setup, tmp_path):
+    data, drive, config, _ = setup
+    kw = dict(drive_root=drive, data_root=data, tmp_dir=tmp_path / "tmp")
+    path = drive / "runs" / "r1" / "config.json"
+    stored = json.loads(path.read_text())
+    del stored["config"]["val"]["window_m"]
+    path.write_text(json.dumps(stored))
+    assert _rerun(monkeypatch, config, "r1", kw)["resume"] is True  # old run, same config: no refusal
+    stored["config"]["val"]["window_m"] = 60.0
+    path.write_text(json.dumps(stored))
+    with pytest.raises(ValueError, match="config.*force=True"):
+        run.main(config, "r1", **kw)
+
+
 def test_load_config_validates_the_val_window(tmp_path):
     p = tmp_path / "c.yaml"
     p.write_text(CONFIG.replace("max_regions: null", "max_regions: null, window_m: 1000"))
