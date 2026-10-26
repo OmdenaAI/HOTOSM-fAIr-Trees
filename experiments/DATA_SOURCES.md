@@ -109,3 +109,15 @@ shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
   into a region is masked there, never labelled.
 - **No split buffer.** HOT's split leaves no gap between train and val, so crowns and imagery can sit next to each other
   across the boundary; the other-split masking above is the only guard.
+
+### Conversion run (2026-10-26)
+
+| Split | Regions | Chips | Label-free tiles |
+| --- | --- | --- | --- |
+| train | 224 | 38,705 | 36.9% |
+| val | 30 | 4,158 | 20.6% |
+
+- 81,458 crown boxes; 3,940 unknown-diameter trees and 9,873 groups masked; 62 crowns from the other split masked; 254
+  trees inside groups left out. `val_share` (valid ground area) 0.097.
+- Shard manifest sha256 `aff1f4b5034fbdfe4e8cd148a89dc94c8ea2bda3efda035f70a1d49c47a3ba6d`.
+- Drive-to-`/content` copy of `z20-0000.tar`: 212.7 MB/s.
