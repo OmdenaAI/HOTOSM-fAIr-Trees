@@ -56,3 +56,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# exploration notebooks keep long f-string report lines as they ran
+"experiments/notebooks/explore_*.ipynb" = ["E501"]
