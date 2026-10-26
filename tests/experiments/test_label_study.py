@@ -13,6 +13,7 @@ from experiments.label_study.study import (  # noqa: E402
     compare_settings,
     load_records,
     make_record,
+    pick_window,
     run_units,
     save_record,
     score_record,
@@ -211,3 +212,56 @@ def test_compare_settings_refuses_different_units():
     b = [_record("w", [], [], [], [], [])]
     with pytest.raises(ValueError, match="same units"):
         compare_settings(a, setting, b, setting)
+
+
+KEEP = {"score": 0.1, "gap_m": 0.0, "min_crowns": 2}
+DROP = {"score": 0.95, "gap_m": 0.0, "min_crowns": 2}
+
+
+def _hits():
+    """Twelve units, each a tree found by KEEP and missed by DROP."""
+    return [_record(f"u{i}", [[0, 0, 10, 10]], [0.9], [[5, 5]], [4.0], []) for i in range(12)]
+
+
+def test_pick_window_keeps_the_smallest_when_no_larger_clears_the_bar():
+    records = {40.0: _hits(), 60.0: _hits(), 80.0: _hits()}  # identical: the paired interval is [0, 0]
+    out = pick_window(records, {40.0: KEEP, 60.0: KEEP, 80.0: KEEP})
+    assert out["chosen_m"] == 40.0
+    assert [(c["from_m"], c["to_m"], c["switch"]) for c in out["comparisons"]] == [
+        (40.0, 60.0, False),
+        (40.0, 80.0, False),
+    ]
+
+
+def test_pick_window_compares_each_larger_window_with_the_current_pick():
+    records = {40.0: _hits(), 60.0: _hits(), 80.0: _hits()}
+    out = pick_window(records, {40.0: DROP, 60.0: KEEP, 80.0: KEEP})
+    assert out["chosen_m"] == 60.0
+    first, second = out["comparisons"]
+    assert (first["from_m"], first["to_m"], first["switch"]) == (40.0, 60.0, True)
+    assert first["ci"][0] > 0
+    assert (second["from_m"], second["to_m"], second["switch"]) == (60.0, 80.0, False)
+    assert second["diff"] == 0
+
+
+def test_pick_window_switches_at_every_step_that_clears():
+    def found(n):
+        """Twelve units, the first n with a detected tree on its point."""
+        return [
+            _record(f"u{i}", [[0, 0, 10, 10]] if i < n else [], [0.9] if i < n else [], [[5, 5]], [4.0], [])
+            for i in range(12)
+        ]
+
+    records = {40.0: found(0), 60.0: found(6), 80.0: found(12)}
+    out = pick_window(records, {40.0: KEEP, 60.0: KEEP, 80.0: KEEP})
+    assert out["chosen_m"] == 80.0
+    assert [(c["from_m"], c["to_m"], c["switch"]) for c in out["comparisons"]] == [
+        (40.0, 60.0, True),
+        (60.0, 80.0, True),
+    ]
+
+
+def test_pick_window_with_one_window_makes_no_comparison():
+    assert pick_window({60.0: _hits()}, {60.0: KEEP}) == {"chosen_m": 60.0, "comparisons": []}
+    with pytest.raises(ValueError, match="at least one"):
+        pick_window({}, {})

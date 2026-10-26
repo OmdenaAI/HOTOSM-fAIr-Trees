@@ -287,6 +287,31 @@ def compare_settings(
     }
 
 
+def pick_window(
+    records: Mapping[float, Sequence[UnitRecord]],
+    settings: Mapping[float, Mapping],
+    *,
+    n: int = 1000,
+    seed: int = 0,
+) -> dict:
+    """Smallest window unless a larger one beats the current pick: windows in ascending order, each paired
+    against the current pick, which it replaces only when the 95% interval of its gain is above zero."""
+    if not records:
+        raise ValueError("need at least one window")
+    windows = sorted(records)
+    chosen = windows[0]
+    comparisons = []
+    for larger in windows[1:]:
+        out = compare_settings(
+            records[chosen], settings[chosen], records[larger], settings[larger], n=n, seed=seed
+        )
+        switch = out["ci"][0] > 0
+        comparisons.append({"from_m": chosen, "to_m": larger, **out, "switch": switch})
+        if switch:
+            chosen = larger
+    return {"chosen_m": chosen, "comparisons": comparisons}
+
+
 def _diameter_ratio(records: Sequence[UnitRecord], setting: Mapping) -> dict:
     """Predicted tree box side sqrt(w*h) over HOT crown diameter, for matched points with a diameter."""
     ratios = []
