@@ -78,6 +78,7 @@ REQUIRED = {
         "pick_window",
         "80.0",
         "window_check.json",
+        "weights.sha256",
         "cache-release-40m",
         "RUN_AUDIT",
         'MODEL != "release"',
