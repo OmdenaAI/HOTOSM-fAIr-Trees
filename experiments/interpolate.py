@@ -7,23 +7,21 @@ without its forgetting. Float tensors are blended; any other tensor must be equa
 """
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 
-def interpolate(base: Path, tuned: Path, alpha: float, out: Path) -> Path:
-    """Write the blended state dict to ``out`` and return it; alpha 0 is ``base``, 1 is ``tuned``."""
+def blend(base: Mapping, tuned: Mapping, alpha: float) -> dict:
+    """``(1 - alpha) * base + alpha * tuned`` per float tensor; alpha 0 is ``base``, 1 is ``tuned``."""
     import torch
 
     if not 0.0 <= alpha <= 1.0:
         raise ValueError(f"alpha must be in [0, 1], got {alpha}")
-    a = torch.load(base, map_location="cpu", weights_only=True)
-    b = torch.load(tuned, map_location="cpu", weights_only=True)
-    if a.keys() != b.keys():
-        raise ValueError(f"checkpoint keys differ: {sorted(a.keys() ^ b.keys())[:5]}")
+    if base.keys() != tuned.keys():
+        raise ValueError(f"checkpoint keys differ: {sorted(base.keys() ^ tuned.keys())[:5]}")
     blended = {}
-    for key, x in a.items():
-        y = b[key]
+    for key, x in base.items():
+        y = tuned[key]
         if x.shape != y.shape:
             raise ValueError(f"{key}: shape {tuple(x.shape)} vs {tuple(y.shape)}")
         if x.is_floating_point():
@@ -32,9 +30,23 @@ def interpolate(base: Path, tuned: Path, alpha: float, out: Path) -> Path:
             blended[key] = x
         else:
             raise ValueError(f"{key}: non-float tensor differs between the checkpoints")
+    return blended
+
+
+def interpolate(base: Path, tuned: Path, alpha: float, out: Path) -> Path:
+    """Blend two model checkpoints into ``out`` and return it.
+
+    Both are read through the model, so a checkpoint saved by an older torchvision (the release weights
+    keep the old FPN key names) is renamed to the current layout before blending.
+    """
+    import torch
+
+    from fair_trees.train import build_model
+
+    states = [build_model(p, trainable_layers=0).state_dict() for p in (base, tuned)]
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(blended, out)
+    torch.save(blend(*states, alpha), out)
     return out
 
 
