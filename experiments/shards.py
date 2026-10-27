@@ -13,6 +13,8 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+from fair_trees.preprocess import CHIP_SUFFIXES
+
 logger = logging.getLogger(__name__)
 
 SHARD_BYTES = 250 * 2**20
@@ -87,10 +89,13 @@ def write_shards(
     lines = [json.dumps(json.loads(f.read_text()), sort_keys=True) for f in region_files]
     (out_dir / "regions.jsonl").write_text("".join(line + "\n" for line in lines))
 
-    zooms = sorted({p.parent.parent.name for p in source_root.glob("*/z*/chips/*.tif")})
+    chips_by_zoom: dict[str, list[Path]] = {}
+    for p in source_root.glob("*/z*/chips/*"):
+        if p.suffix.lower() in CHIP_SUFFIXES:
+            chips_by_zoom.setdefault(p.parent.parent.name, []).append(p)
     shards: list[dict] = []
-    for z in zooms:
-        chips = sorted(source_root.glob(f"*/{z}/chips/*.tif"), key=lambda p: _arcname(p, source_root))
+    for z in sorted(chips_by_zoom):
+        chips = sorted(chips_by_zoom[z], key=lambda p: _arcname(p, source_root))
         shards += _pack_zoom(chips, source_root, out_dir, z, shard_bytes)
 
     manifest = {

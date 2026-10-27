@@ -75,7 +75,7 @@ def test_load_config_validates(tmp_path):
         run.load_config(p)
 
 
-@pytest.mark.parametrize("name", ["neon_platform.yaml", "neon_resume_check.yaml"])
+@pytest.mark.parametrize("name", ["neon_platform.yaml", "neon_resume_check.yaml", "hot_platform.yaml"])
 def test_shipped_configs_parse(name):
     conf = run.load_config(Path(run.__file__).parent / "configs" / name)
     parse_train_params(conf["hyperparameters"])
@@ -107,6 +107,56 @@ def test_main_writes_run_files_and_calls_train(monkeypatch, setup, tmp_path):
     } <= set(env)
     assert env["num_workers"] == 2
     assert json.loads((drive / "runs" / "r2" / "config.json").read_text())["parsed"]["learning_rate"] == 0.002
+
+
+def test_main_passes_the_val_window_to_train(monkeypatch, setup, tmp_path):
+    data, drive, config, _ = setup
+    kw = dict(drive_root=drive, data_root=data, tmp_dir=tmp_path / "tmp")
+    assert _rerun(monkeypatch, config, "r1", kw)["val_params"].window_m == 40.0
+    config.write_text(CONFIG.replace("max_regions: null", "max_regions: null, window_m: 60"))
+    calls = _rerun(monkeypatch, config, "r2", kw)
+    assert calls["val_params"].window_m == 60.0
+
+
+def test_stored_config_without_the_val_window_is_not_a_change(monkeypatch, setup, tmp_path):
+    data, drive, config, _ = setup
+    kw = dict(drive_root=drive, data_root=data, tmp_dir=tmp_path / "tmp")
+    path = drive / "runs" / "r1" / "config.json"
+    stored = json.loads(path.read_text())
+    del stored["config"]["val"]["window_m"]
+    path.write_text(json.dumps(stored))
+    assert _rerun(monkeypatch, config, "r1", kw)["resume"] is True  # old run, same config: no refusal
+    stored["config"]["val"]["window_m"] = 60.0
+    path.write_text(json.dumps(stored))
+    with pytest.raises(ValueError, match="config.*force=True"):
+        run.main(config, "r1", **kw)
+
+
+def test_load_config_validates_the_val_window(tmp_path):
+    p = tmp_path / "c.yaml"
+    p.write_text(CONFIG.replace("max_regions: null", "max_regions: null, window_m: 1000"))
+    conf = run.load_config(p)
+    with pytest.raises(ValueError, match="window_m"):
+        run.val_params(conf)
+
+
+def test_evaluate_scores_val_with_the_configured_window(monkeypatch, setup, fake_session):
+    data, drive, config, bench = setup
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+    import fair_trees.evaluate as ev
+
+    windows = []
+    real = ev.evaluate_regions
+    monkeypatch.setattr(
+        ev,
+        "evaluate_regions",
+        lambda fn, val, params, **k: windows.append(params.window_m) or real(fn, val, params, **k),
+    )
+    run.evaluate("r1", bench, drive_root=drive, data_root=data)  # stored config: no window_m
+    config.write_text(CONFIG.replace("max_regions: null", "max_regions: null, window_m: 60"))
+    run.evaluate("r1", bench, drive_root=drive, data_root=data, config=config)
+    assert windows == [40.0, 60.0]
+    assert json.loads((drive / "runs" / "r1" / "eval.json").read_text())["parts"]["val"]["window_m"] == 60.0
 
 
 def _rerun(monkeypatch, config, run_id, kw, **main_kw):
@@ -198,7 +248,7 @@ def test_export_writes_onnx_and_passes_parity(setup):
     assert json.loads((drive / "runs" / "r1" / "export.json").read_text()) == result
 
 
-def _fake_run(drive, run_id, digests, unit_counts):
+def _fake_run(drive, run_id, digests, unit_counts, window_m=None):
     d = drive / "runs" / run_id
     d.mkdir(parents=True, exist_ok=True)
     with (d / "metrics.csv").open("w", newline="") as f:
@@ -212,9 +262,10 @@ def _fake_run(drive, run_id, digests, unit_counts):
     ]
     tp, fp, fn = (sum(c[k] for c in unit_counts) for k in range(3))
     f1 = 2 * tp / (2 * tp + fp + fn)
-    (d / "eval.json").write_text(
-        json.dumps({"parts": {"val": {"f1": f1, "f1_ci95": [f1 - 0.05, f1 + 0.05], "units": units}}})
-    )
+    val = {"f1": f1, "f1_ci95": [f1 - 0.05, f1 + 0.05], "units": units}
+    if window_m is not None:  # older eval.json files carry none
+        val["window_m"] = window_m
+    (d / "eval.json").write_text(json.dumps({"parts": {"val": val}}))
 
 
 def test_compare_runs(tmp_path):
@@ -226,6 +277,27 @@ def test_compare_runs(tmp_path):
     assert r["paired_diff"][0] == 0.0
     _fake_run(tmp_path, "c", [("p0", "s0"), ("p1", "sX")], counts)
     assert run.compare_runs("a", "c", drive_root=tmp_path)["sample_ids_equal"] is False
+
+
+def test_compare_runs_refuses_different_val_windows(tmp_path):
+    counts = [(8, 2, 1), (5, 1, 2)]
+    _fake_run(tmp_path, "a", [("p0", "s0")], counts, window_m=40.0)
+    _fake_run(tmp_path, "b", [("p0", "s0")], counts, window_m=60.0)
+    with pytest.raises(ValueError, match=r"40\.0.*60\.0"):
+        run.compare_runs("a", "b", drive_root=tmp_path)
+
+
+def test_compare_runs_treats_a_missing_val_window_as_40(tmp_path):
+    counts = [(8, 2, 1), (5, 1, 2)]
+    _fake_run(tmp_path, "a", [("p0", "s0")], counts)
+    _fake_run(tmp_path, "b", [("p0", "s0")], counts, window_m=40.0)
+    _fake_run(tmp_path, "c", [("p0", "s0")], counts, window_m=60.0)
+    assert (
+        run.compare_runs("a", "b", drive_root=tmp_path)["f1_a"]
+        == run.compare_runs("b", "a", drive_root=tmp_path)["f1_a"]
+    )
+    with pytest.raises(ValueError, match="window"):
+        run.compare_runs("a", "c", drive_root=tmp_path)
 
 
 def test_compare_runs_without_common_epochs_compares_nothing(tmp_path):

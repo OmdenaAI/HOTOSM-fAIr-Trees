@@ -9,7 +9,7 @@ gpd = pytest.importorskip("geopandas")
 
 from shapely.geometry import MultiPolygon, Point, box  # noqa: E402
 
-from experiments.label_study.hot import HotData, split_units, unit_mosaic, unit_truth  # noqa: E402
+from experiments.label_study.hot import HotData, split_units, unit_mosaic, unit_truth, write_tile  # noqa: E402
 from fair_trees.georef import mercator_y_to_lat, tile_bounds_4326  # noqa: E402
 
 pytestmark = pytest.mark.filterwarnings("ignore:Dataset has no geotransform")
@@ -164,3 +164,9 @@ def test_interior_group_does_not_touch_the_edge(tmp_path):
     t = unit_truth(data, m, TILE_IDS)
     assert t.group_edge.tolist() == [False]
     assert np.allclose(t.group_area_m2, [320 * 64 * m.gsd_m**2], rtol=1e-3)
+
+
+def test_write_tile_keeps_png_and_reencodes_other_modes(tmp_path):
+    assert write_tile(png_bytes(), "OAM-1-2-20", tmp_path).name == "OAM-1-2-20.png"
+    grey = write_tile(png_bytes("L"), "OAM-1-3-20", tmp_path)
+    assert Image.open(grey).mode == "RGB"

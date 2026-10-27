@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from fair_trees.params import InferenceParams
     from fair_trees.serve import RunFn
     from fair_trees.train import TrainResult
 
@@ -33,7 +34,7 @@ BENCHMARK = Path(__file__).parent / "benchmark.json"
 
 CONFIG_KEYS = ("weights", "sources", "hyperparameters", "val", "mlflow")
 REQUIRED_KEYS = ("weights", "sources")
-DEFAULT_VAL = {"zooms": [20, 19], "max_regions": None}
+DEFAULT_VAL = {"zooms": [20, 19], "max_regions": None, "window_m": 40.0}
 MLFLOW_EXPERIMENT = "fair_trees"
 PARITY_UNITS = 3
 PARITY_ATOL = 2e-3
@@ -56,6 +57,19 @@ def load_config(path: Path) -> dict:
     conf["val"] = {**DEFAULT_VAL, **(conf.get("val") or {})}
     conf.setdefault("mlflow", True)
     return conf
+
+
+def _stored_config(path: Path) -> dict:
+    """The ``config`` of a run's config.json, with val defaults added that it predates (e.g. ``window_m``)."""
+    conf = json.loads(Path(path).read_text())["config"]
+    return {**conf, "val": {**DEFAULT_VAL, **conf.get("val", {})}}
+
+
+def val_params(conf: Mapping) -> "InferenceParams":
+    """Inference params to score val regions with the configured window."""
+    from fair_trees.params import parse_inference_params
+
+    return parse_inference_params({"window_m": conf["val"]["window_m"]})
 
 
 def repo_sha() -> str:
@@ -117,7 +131,7 @@ def _run_changes(
     if config_path.exists():
         stored = json.loads(config_path.read_text())
         # round-tripped through json like the stored copy
-        if stored["config"] != json.loads(json.dumps(conf)):
+        if _stored_config(config_path) != json.loads(json.dumps(conf)):
             changed.append("the config")
         if stored["parsed"] != parsed:
             changed.append("the parsed hyperparameters")
@@ -200,6 +214,7 @@ def main(
         out_dir=out_dir,
         on_epoch_end=on_epoch_end,
         val_zooms=tuple(conf["val"]["zooms"]),
+        val_params=val_params(conf),
         num_workers=num_workers,
         tmp_dir=tmp_dir,
         repo_sha=sha,
@@ -255,19 +270,20 @@ def evaluate(
     """Score a run on its val regions and on the frozen NEON benchmark parts; writes ``eval.json``."""
     from experiments.neon_eval import DF_COMPAT
     from fair_trees.evaluate import evaluate_regions, evaluate_units
-    from fair_trees.params import InferenceParams
 
     out_dir = Path(drive_root) / "runs" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     if config is not None:
         conf = load_config(config)
     else:
-        conf = json.loads((out_dir / "config.json").read_text())["config"]
+        conf = _stored_config(out_dir / "config.json")
     weights = Path(weights) if weights is not None else out_dir / "best.pt"
     run_fn = _run_fn(weights, device)
 
     _, val = _regions(conf, data_root)
-    parts = {"val": _with_ci(evaluate_regions(run_fn, val, InferenceParams(), zooms=conf["val"]["zooms"]))}
+    params = val_params(conf)
+    report = evaluate_regions(run_fn, val, params, zooms=conf["val"]["zooms"])
+    parts = {"val": _with_ci(report) | {"window_m": params.window_m}}
     for name, part, units in _benchmark_parts(benchmark, data_root):
         report = evaluate_units(run_fn, units, DF_COMPAT, ignore=False)
         lower = float(part["release_f1_ci95"][0])
@@ -361,6 +377,11 @@ def compare_runs(a: str, b: str, *, drive_root: Path = DRIVE_ROOT) -> dict:
     counts_a, counts_b = _unit_counts(val_a), _unit_counts(val_b)
     if set(counts_a) != set(counts_b):
         raise ValueError(f"runs {a} and {b} were evaluated on different val units")
+    window_a, window_b = (v.get("window_m", DEFAULT_VAL["window_m"]) for v in (val_a, val_b))
+    if window_a != window_b:  # eval.json before window_m was recorded scored val at the 40 m default
+        raise ValueError(
+            f"runs {a} and {b} were scored with different val windows: {window_a} m and {window_b} m"
+        )
     ids = list(counts_a)
     a_ci = val_a["f1_ci95"]
     f1_b = val_b["f1"]

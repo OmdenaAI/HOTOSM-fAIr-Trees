@@ -122,23 +122,23 @@ def split_units(tiles: gpd.GeoDataFrame, split: str, block_tiles: int = 16) -> l
     return sorted(units)
 
 
-def unit_mosaic(images: Mapping[str, bytes], tile_ids: Sequence[str], workdir: Path) -> Mosaic:
-    """Stitch a unit's tiles into one mosaic; ``workdir`` is created fresh to hold the chips.
+def write_tile(image: bytes, tile_id: str, out_dir: Path) -> Path:
+    """Write a tile as ``{tile_id}.png|.jpg``: RGB/RGBA PNG or JPEG unchanged, anything else as PNG."""
+    img = Image.open(io.BytesIO(image))
+    if img.format in KEPT_FORMATS and img.mode in ("RGB", "RGBA"):
+        path = out_dir / f"{tile_id}{KEPT_FORMATS[img.format]}"
+        path.write_bytes(image)
+    else:
+        path = out_dir / f"{tile_id}.png"
+        transparent = img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info
+        img.convert("RGBA" if transparent else "RGB").save(path, format="PNG")
+    return path
 
-    RGB and RGBA tiles in a kept format are written unchanged; any other tile is re-encoded as PNG.
-    """
+
+def unit_mosaic(images: Mapping[str, bytes], tile_ids: Sequence[str], workdir: Path) -> Mosaic:
+    """Stitch a unit's tiles into one mosaic; ``workdir`` is created fresh to hold the chips."""
     workdir.mkdir(parents=True)
-    paths = []
-    for tile_id in tile_ids:
-        image = Image.open(io.BytesIO(images[tile_id]))
-        if image.format in KEPT_FORMATS and image.mode in ("RGB", "RGBA"):
-            path = workdir / f"{tile_id}{KEPT_FORMATS[image.format]}"
-            path.write_bytes(images[tile_id])
-        else:
-            path = workdir / f"{tile_id}.png"
-            transparent = image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info
-            image.convert("RGBA" if transparent else "RGB").save(path, format="PNG")
-        paths.append(path)
+    paths = [write_tile(images[tile_id], tile_id, workdir) for tile_id in tile_ids]
     mosaics = mosaic_chips(paths, use_sidecar=False)
     if len(mosaics) != 1:
         raise ValueError(f"expected one mosaic for {len(tile_ids)} tiles, got {len(mosaics)}")

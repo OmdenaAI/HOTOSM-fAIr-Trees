@@ -10,7 +10,7 @@ pytest.importorskip("scipy")
 
 import fair_trees.train as T  # noqa: E402
 from fair_trees.dataset import load_regions  # noqa: E402
-from fair_trees.params import AugmentParams, TrainParams  # noqa: E402
+from fair_trees.params import AugmentParams, InferenceParams, TrainParams  # noqa: E402
 
 X0 = Y0 = 2**19
 CFG = TrainParams(
@@ -69,6 +69,20 @@ def _run(monkeypatch, script, regions, weights, out, cfg=CFG, **kw):
 
 def _view(history):
     return [{k: h[k] for k in KEYS} for h in history]
+
+
+def test_validation_uses_the_given_params_and_defaults_to_40_m(monkeypatch, regions, weights, tmp_path):
+    seen = []
+    script = Script([0.5])
+    validate = script.validate
+    script.validate = lambda model, device, units, params, epoch: (
+        seen.append(params) or validate(model, device, units, params, epoch)
+    )
+    cfg = dataclasses.replace(CFG, epochs=1)
+    _run(monkeypatch, script, regions, weights, tmp_path / "default", cfg=cfg)
+    given = InferenceParams(window_m=60.0)
+    _run(monkeypatch, script, regions, weights, tmp_path / "given", cfg=cfg, val_params=given)
+    assert seen == [InferenceParams(), given] and seen[0].window_m == 40.0
 
 
 def test_early_stopping_best_and_logs(monkeypatch, regions, weights, tmp_path):

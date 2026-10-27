@@ -378,6 +378,7 @@ def train(
     resume: bool = True,
     force: bool = False,
     val_zooms: Sequence[int] = (20, 19),
+    val_params: InferenceParams | None = None,
     num_workers: int = 2,
     device: str | None = None,
     tmp_dir: Path | None = None,
@@ -391,6 +392,8 @@ def train(
     """
     if not train_regions:
         raise ValueError("no train regions")
+    if val_params is None:
+        val_params = InferenceParams()
     out_dir = Path(out_dir)
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
     model = build_model(weights, trainable_layers=cfg.trainable_layers).to(device).train()
@@ -510,7 +513,7 @@ def train(
             "train/samples_per_s": trained / train_s if train_s > 0 else 0.0,
         }
         if val_units:
-            v = _validate(model, device, val_units, InferenceParams(), epoch)
+            v = _validate(model, device, val_units, val_params, epoch)
             metrics |= {f"val/{k}": float(value) for k, value in v.items()}
             if v["seconds"] > 0.15 * (train_s + v["seconds"]):
                 logger.warning(
