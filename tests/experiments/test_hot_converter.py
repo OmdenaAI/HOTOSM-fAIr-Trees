@@ -268,3 +268,44 @@ def test_convert_refuses_an_image_for_an_unknown_tile(tmp_path):
 
     with pytest.raises(ValueError, match="OAM-1-1-20"):
         convert(data, images, tmp_path / "out")
+
+
+def biome_by_tile(on_polygon):
+    """A biome_fn that answers "forest" at the centres of the named tiles and "unknown" elsewhere."""
+    centres = {n: ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for n in TILES for b in [tile_bounds_4326(*tile_xy(n), 20)]}
+
+    def biome_fn(lon, lat):
+        return "forest" if any((lon, lat) == pytest.approx(centres[n]) for n in on_polygon) else "unknown"
+
+    return biome_fn
+
+
+def biomes(out):
+    return {n: json.loads((out / r / "region.json").read_text())["biome"] for n, r in REGION.items()}
+
+
+def test_biome_is_the_commonest_answer_over_a_regions_tiles(tmp_path):
+    # block_tiles=2: A, B and E form one train region whose tiles are mostly on-polygon
+    data = hot_data()
+    stats = convert(data, Images(data), tmp_path / "out", block_tiles=2, biome_fn=biome_by_tile("AB"))
+    metas = [json.loads(p.read_text()) for p in (tmp_path / "out").glob("*/region.json")]
+    assert {m["split"]: m["biome"] for m in metas if m["split"] == "train"} == {"train": "forest"}
+    assert stats["regions_per_biome"] == {"forest": 2}  # the train region, and val C by the conversion-wide majority
+
+
+def test_region_off_polygon_takes_the_conversion_wide_majority(tmp_path):
+    out, stats, _ = run(tmp_path, biome_fn=biome_by_tile("AB"))
+    assert biomes(out) == {"A": "forest", "B": "forest", "C": "forest", "E": "forest"}
+    assert stats["regions_per_biome"] == {"forest": 4}
+
+
+def test_regions_per_biome_counts_regions(tmp_path):
+    out, stats, _ = run(tmp_path, biome_fn=biome_by_tile("ABE"))
+    assert stats["regions_per_biome"] == {"forest": 4}
+    assert json.loads((out / "stats.json").read_text())["regions_per_biome"] == {"forest": 4}
+
+
+def test_no_biome_fn_gives_unknown(tmp_path):
+    out, stats, _ = run(tmp_path)
+    assert set(biomes(out).values()) == {"unknown"}
+    assert stats["regions_per_biome"] == {"unknown": 4}

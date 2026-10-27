@@ -121,3 +121,5 @@ shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
   trees inside groups left out. `val_share` (valid ground area) 0.097.
 - Shard manifest sha256 `aff1f4b5034fbdfe4e8cd148a89dc94c8ea2bda3efda035f70a1d49c47a3ba6d`.
 - Drive-to-`/content` copy of `z20-0000.tar`: 212.7 MB/s.
+- Caveat: the committed `hot-platform` run was converted before biomes were looked up per tile, so about 19.5% of its
+  draws went to `unknown`-biome regions (coastal blocks), oversampled about 3.5x; reconvert before HOT is used again.

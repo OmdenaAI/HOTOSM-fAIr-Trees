@@ -10,6 +10,7 @@ a crown from another split that reaches into a region is masked there instead (H
 
 import json
 import logging
+from collections import Counter
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -123,16 +124,15 @@ def _write_region(
     labels: list[dict],
     ignore: list[dict],
     valid_area_m2: float,
-    biome_fn: Callable[[float, float], str] | None,
+    biome: str,
 ) -> None:
     region_dir = out_root / region.id
     _write_json(region_dir / "labels.geojson", {"type": "FeatureCollection", "features": labels})
     _write_json(region_dir / "ignore.geojson", {"type": "FeatureCollection", "features": ignore})
-    centre = region.footprint.centroid
     meta = {
         "id": region.id,
         "source": SOURCE,
-        "biome": biome_fn(centre.x, centre.y) if biome_fn else "unknown",
+        "biome": biome,
         "licence": LICENCE,
         "split": SPLITS[region.hot_split],
         "zooms": sorted({int(z) for z in region.tiles["z"]}),
@@ -140,6 +140,26 @@ def _write_region(
         "valid_area_m2": valid_area_m2,
     }
     _write_json(region_dir / "region.json", meta)
+
+
+def _biomes(regions: list[_Region], biome_fn: Callable[[float, float], str] | None) -> dict[str, str]:
+    """Per region id, the commonest biome over its tile centres, ignoring ``"unknown"`` answers.
+
+    A footprint centroid can fall outside the ecoregion polygons (coastal blocks) although the tiles do not,
+    so the lookup is per tile. A region with no tile on a polygon takes the commonest biome of the whole
+    conversion; ``"unknown"`` remains only when no tile anywhere found one.
+    """
+    found = {}
+    for region in regions:
+        answers = []
+        if biome_fn:
+            for x, y, z in zip(region.tiles["x"], region.tiles["y"], region.tiles["z"], strict=True):
+                west, south, east, north = tile_bounds_4326(x, y, z)
+                answers.append(biome_fn((west + east) / 2, (south + north) / 2))
+        found[region.id] = Counter(a for a in answers if a != "unknown")
+    overall = sum(found.values(), Counter())
+    fallback = overall.most_common(1)[0][0] if overall else "unknown"
+    return {rid: counts.most_common(1)[0][0] if counts else fallback for rid, counts in found.items()}
 
 
 def _label_free_share(tiles: gpd.GeoDataFrame, crowns: gpd.GeoDataFrame) -> dict[str, float]:
@@ -174,6 +194,7 @@ def convert(
     crowns, in_group = _crowns(data)
     groups = data.groups.to_crs("EPSG:4326")
     area_m2 = _write_chips(regions, images, out_root)
+    biomes = _biomes(regions, biome_fn)
 
     squares, known, tree_split = (
         crowns.geometry.to_numpy(),
@@ -199,7 +220,7 @@ def convert(
         ignore = [_feature(g, {"reason": "tree_group"}) for g in group_shapes[group_idx]]
         ignore += [_feature(g, {"reason": "unknown_diameter"}) for g in squares[unknown_idx]]
         ignore += [_feature(g, {"reason": "other_split"}) for g in squares[other_idx]]
-        _write_region(out_root, region, labels, ignore, area_m2[region.id], biome_fn)
+        _write_region(out_root, region, labels, ignore, area_m2[region.id], biomes[region.id])
 
     split_m2 = dict.fromkeys(SPLITS.values(), 0.0)
     regions_per_split = dict.fromkeys(SPLITS.values(), 0)
@@ -213,6 +234,7 @@ def convert(
     stats = {
         "regions": regions_per_split,
         "chips": chips_per_split,
+        "regions_per_biome": dict(Counter(biomes.values())),
         "boxes": len(labelled),
         "ignored_unknown_diameter": len(unknown),
         "masked_other_split": len(other_split),
