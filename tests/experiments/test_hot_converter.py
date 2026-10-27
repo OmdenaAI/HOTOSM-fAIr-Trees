@@ -272,7 +272,9 @@ def test_convert_refuses_an_image_for_an_unknown_tile(tmp_path):
 
 def biome_by_tile(on_polygon):
     """A biome_fn that answers "forest" at the centres of the named tiles and "unknown" elsewhere."""
-    centres = {n: ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for n in TILES for b in [tile_bounds_4326(*tile_xy(n), 20)]}
+    centres = {
+        n: ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2) for n in TILES for b in [tile_bounds_4326(*tile_xy(n), 20)]
+    }
 
     def biome_fn(lon, lat):
         return "forest" if any((lon, lat) == pytest.approx(centres[n]) for n in on_polygon) else "unknown"
@@ -290,7 +292,9 @@ def test_biome_is_the_commonest_answer_over_a_regions_tiles(tmp_path):
     stats = convert(data, Images(data), tmp_path / "out", block_tiles=2, biome_fn=biome_by_tile("AB"))
     metas = [json.loads(p.read_text()) for p in (tmp_path / "out").glob("*/region.json")]
     assert {m["split"]: m["biome"] for m in metas if m["split"] == "train"} == {"train": "forest"}
-    assert stats["regions_per_biome"] == {"forest": 2}  # the train region, and val C by the conversion-wide majority
+    assert stats["regions_per_biome"] == {
+        "forest": 2
+    }  # the train region, and val C by the conversion-wide majority
 
 
 def test_region_off_polygon_takes_the_conversion_wide_majority(tmp_path):

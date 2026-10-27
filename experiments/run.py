@@ -281,7 +281,9 @@ def evaluate(
     run_fn = _run_fn(weights, device)
 
     _, val = _regions(conf, data_root)
-    parts = {"val": _with_ci(evaluate_regions(run_fn, val, val_params(conf), zooms=conf["val"]["zooms"]))}
+    params = val_params(conf)
+    report = evaluate_regions(run_fn, val, params, zooms=conf["val"]["zooms"])
+    parts = {"val": _with_ci(report) | {"window_m": params.window_m}}
     for name, part, units in _benchmark_parts(benchmark, data_root):
         report = evaluate_units(run_fn, units, DF_COMPAT, ignore=False)
         lower = float(part["release_f1_ci95"][0])
@@ -375,6 +377,11 @@ def compare_runs(a: str, b: str, *, drive_root: Path = DRIVE_ROOT) -> dict:
     counts_a, counts_b = _unit_counts(val_a), _unit_counts(val_b)
     if set(counts_a) != set(counts_b):
         raise ValueError(f"runs {a} and {b} were evaluated on different val units")
+    window_a, window_b = (v.get("window_m", DEFAULT_VAL["window_m"]) for v in (val_a, val_b))
+    if window_a != window_b:  # eval.json before window_m was recorded scored val at the 40 m default
+        raise ValueError(
+            f"runs {a} and {b} were scored with different val windows: {window_a} m and {window_b} m"
+        )
     ids = list(counts_a)
     a_ci = val_a["f1_ci95"]
     f1_b = val_b["f1"]
