@@ -1,0 +1,22 @@
+# hot_teacher_empty_1ep.yaml with at most 10% of the crops holding no HOT label (about 28% without the cap):
+# the teacher masks on label-free tiles recovered part of NEON, so this trains on those tiles far less.
+weights: weights/NEON.pt          # relative to the Drive root
+sources: [hot-teacher-empty]
+hyperparameters:
+  trainable_layers: 0
+  learning_rate: 0.001
+  momentum: 0.9
+  weight_decay: 0.0001
+  l2sp_alpha: 0.0
+  epochs: 1
+  batch_size: 4
+  samples_per_epoch: null         # one epoch = the number of train chips, as on the platform
+  schedule: cosine
+  empty_crop_cap: 0.1             # share of crops with no label box centre inside
+  amp: true
+  seed: 42
+val:
+  zooms: [20, 19]
+  max_regions: null
+  window_m: 60                    # the window hot_platform.yaml and its weight blends were scored at
+mlflow: true

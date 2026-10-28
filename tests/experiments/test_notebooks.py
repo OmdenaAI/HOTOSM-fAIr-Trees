@@ -54,6 +54,18 @@ REQUIRED = {
         "run.compare_runs",
         "flush_and_unmount",
     ],
+    "colab_teacher_hot.ipynb": [
+        "REPO_SHA",
+        "drive.mount",
+        "git clone",
+        "GITHUB_TOKEN",
+        "stage_shards",
+        "write_teacher_sets",
+        "write_shards",
+        "manifest_hash",
+        "contact",
+        "flush_and_unmount",
+    ],
     "label_study.ipynb": [
         "REPO_SHA",
         "drive.mount",

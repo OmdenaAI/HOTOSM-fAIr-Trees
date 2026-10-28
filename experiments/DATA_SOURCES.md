@@ -110,7 +110,7 @@ shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
 - **No split buffer.** HOT's split leaves no gap between train and val, so crowns and imagery can sit next to each other
   across the boundary; the other-split masking above is the only guard.
 
-### Conversion run (2026-10-26)
+### Conversion run (2026-10-28, converter dd883b872b4bc333637a4e63c49eae2698f55d88)
 
 | Split | Regions | Chips | Label-free tiles |
 | --- | --- | --- | --- |
@@ -119,7 +119,33 @@ shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
 
 - 81,458 crown boxes; 3,940 unknown-diameter trees and 9,873 groups masked; 62 crowns from the other split masked; 254
   trees inside groups left out. `val_share` (valid ground area) 0.097.
-- Shard manifest sha256 `aff1f4b5034fbdfe4e8cd148a89dc94c8ea2bda3efda035f70a1d49c47a3ba6d`.
-- Drive-to-`/content` copy of `z20-0000.tar`: 212.7 MB/s.
-- Caveat: the committed `hot-platform` run was converted before biomes were looked up per tile, so about 19.5% of its
-  draws went to `unknown`-biome regions (coastal blocks), oversampled about 3.5x; reconvert before HOT is used again.
+- All 254 regions fall in one biome (Tropical & Subtropical Moist Broadleaf Forests), so biome balancing has no effect.
+- Shard manifest sha256 `24d84f0f98aac87f212992290ab31dd36d75f5c1cd047a9b0b55db9b23e853e2`.
+- Drive-to-`/content` copy of `z20-0000.tar`: 117.2 MB/s.
+- The earlier conversion (2026-10-26, manifest `aff1f4b5034fbdfe4e8cd148a89dc94c8ea2bda3efda035f70a1d49c47a3ba6d`, kept
+  on Drive as `shards/hot-aff1f4b5/`) looked biomes up at region centroids. Coastal centroids fall off the RESOLVE
+  polygons, so about 19.5% of the committed `hot-platform` run's draws went to `unknown`-biome regions, oversampled
+  about 3.5x. Every other count above matches it, and region ids come from the tile blocks, so val scores compare
+  across the two.
+
+### Teacher-masked HOT sets (2026-10-28, code 4d069e25acd19575c35ebe0373fe02ff3cd97766)
+
+Written by `experiments/notebooks/colab_teacher_hot.ipynb` from the `hot` shards above to
+`MyDrive/fair_trees/shards/hot-teacher-all/` and `shards/hot-teacher-empty/`. The release weights ran over the 224 train
+regions at a 60 m window; detections scoring at least 0.3 that overlap no HOT label and are not centred in an existing
+mask became `reason: "teacher"` ignore squares. Val regions are unchanged.
+
+| | Count |
+| --- | --- |
+| Teacher detections | 128,541 |
+| On a HOT label (dropped) | 43,465 |
+| Centred in an existing mask, e.g. a tree group (dropped) | 35,450 |
+| Kept, `hot-teacher-all` (everywhere) | 49,626, 1.30% of the valid train area |
+| Kept, `hot-teacher-empty` (centre on a tile no label touches) | 21,066, 0.56% of the valid train area |
+| Train tiles over the sampler's 80% mask limit, before / after either set | 1,155 / 1,168 of 38,705 |
+
+- Manifest sha256: `hot-teacher-all` `09f5d813bae7c81943605c4a3d8701fbf39f92877e1759e3e56e3008b48dd339`,
+  `hot-teacher-empty` `8376daa9727746b22a33d885184363103ca10825fcaadf4eb8c55465ebd7096c`.
+- Contact sheet (`shards/hot-teacher-all/qa-teacher-contact-sheet.png`): in canopy the squares sit on crowns; in built-up
+  tiles some sit on roofs, mostly blue ones and tarps, so the sets also stop training from correcting those false
+  positives.
