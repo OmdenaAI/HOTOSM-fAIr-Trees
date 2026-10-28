@@ -127,3 +127,25 @@ shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
   polygons, so about 19.5% of the committed `hot-platform` run's draws went to `unknown`-biome regions, oversampled
   about 3.5x. Every other count above matches it, and region ids come from the tile blocks, so val scores compare
   across the two.
+
+### Teacher-masked HOT sets (2026-10-28, code 4d069e25acd19575c35ebe0373fe02ff3cd97766)
+
+Written by `experiments/notebooks/colab_teacher_hot.ipynb` from the `hot` shards above to
+`MyDrive/fair_trees/shards/hot-teacher-all/` and `shards/hot-teacher-empty/`. The release weights ran over the 224 train
+regions at a 60 m window; detections scoring at least 0.3 that overlap no HOT label and are not centred in an existing
+mask became `reason: "teacher"` ignore squares. Val regions are unchanged.
+
+| | Count |
+| --- | --- |
+| Teacher detections | 128,541 |
+| On a HOT label (dropped) | 43,465 |
+| Centred in an existing mask, e.g. a tree group (dropped) | 35,450 |
+| Kept, `hot-teacher-all` (everywhere) | 49,626, 1.30% of the valid train area |
+| Kept, `hot-teacher-empty` (centre on a tile no label touches) | 21,066, 0.56% of the valid train area |
+| Train tiles over the sampler's 80% mask limit, before / after either set | 1,155 / 1,168 of 38,705 |
+
+- Manifest sha256: `hot-teacher-all` `09f5d813bae7c81943605c4a3d8701fbf39f92877e1759e3e56e3008b48dd339`,
+  `hot-teacher-empty` `8376daa9727746b22a33d885184363103ca10825fcaadf4eb8c55465ebd7096c`.
+- Contact sheet (`shards/hot-teacher-all/qa-teacher-contact-sheet.png`): in canopy the squares sit on crowns; in built-up
+  tiles some sit on roofs, mostly blue ones and tarps, so the sets also stop training from correcting those false
+  positives.
