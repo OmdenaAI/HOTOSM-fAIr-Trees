@@ -136,9 +136,17 @@ def _to_4326(geom: shapely.Geometry, transform: Affine, crs) -> dict:
 
 
 def tile_features(
-    annotations: Sequence[Mapping], transform: Affine, crs, ids: Mapping[str, int]
+    annotations: Sequence[Mapping],
+    transform: Affine,
+    crs,
+    ids: Mapping[str, int],
+    *,
+    gsd_m: float = SOURCE_GSD,
 ) -> tuple[list[dict], list[dict], dict]:
-    """Label features (tree boxes) and ignore features (large trees, canopy minus trees), in EPSG:4326."""
+    """Label features (tree boxes) and ignore features (large trees, canopy minus trees), in EPSG:4326.
+
+    ``gsd_m`` is the tile's ground metres per pixel, for the ``MAX_TREE_SIDE_M`` limit.
+    """
     trees, large, canopy_px = [], [], []
     for a in annotations:
         cid = int(a["category_id"])
@@ -146,7 +154,7 @@ def tile_features(
             x, y, w, h = (float(v) for v in a["bbox"])
             if w <= 0 or h <= 0:
                 continue
-            side_m = max(w, h) * SOURCE_GSD
+            side_m = max(w, h) * gsd_m
             (large if side_m > MAX_TREE_SIDE_M else trees).append(box(x, y, x + w, y + h))
         elif cid == ids["canopy"]:
             canopy_px.append(_canopy_pixels(a["segmentation"]))
@@ -271,7 +279,7 @@ def convert(
         shutil.rmtree(work_dir / region_id, ignore_errors=True)
 
         anns = json.loads(row["coco_annotations"] or "[]")
-        labels, ignore, counts = tile_features(anns, transform, crs, ids)
+        labels, ignore, counts = tile_features(anns, transform, crs, ids, gsd_m=source_gsd)
         for f in labels:
             f["properties"] |= {"licence": licence, "region": region_id}
         _write_json(region_dir / "labels.geojson", {"type": "FeatureCollection", "features": labels})

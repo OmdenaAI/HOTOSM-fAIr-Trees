@@ -96,6 +96,12 @@ def test_tile_features_large_tree_becomes_ignore():
     assert counts["large_trees"] == 1
 
 
+def test_tile_features_large_tree_limit_is_in_ground_metres():
+    # 350 px at 6.3 cm on the ground (a 10 cm Mercator pixel at 51 degrees) is a 22 m crown: a label
+    labels, ignore, _ = oamtcd.tile_features([_ann(2, (0, 0, 350, 40))], TRANSFORM, CRS, IDS, gsd_m=0.063)
+    assert len(labels) == 1 and ignore == []
+
+
 def test_tile_features_canopy_keeps_its_trees_unmasked():
     anns = [_ann(1, (0, 0, 300, 300)), _ann(2, (50, 50, 20, 20))]
     labels, ignore, _ = oamtcd.tile_features(anns, TRANSFORM, CRS, IDS)
