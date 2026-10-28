@@ -1,0 +1,2917 @@
+{
+  "run_id": "hot-1ep-lr3e-4-wise-0.4",
+  "weights": "/content/drive/MyDrive/fair_trees/runs/hot-1ep-lr3e-4-wise-0.4/weights.pt",
+  "parts": {
+    "val": {
+      "confidence_threshold": 0.1,
+      "iou_threshold": 0.4,
+      "precision": 0.2754512157451128,
+      "recall": 0.5710365016924344,
+      "f1": 0.3716361038342463,
+      "aoi_f1": 0.3874923763375024,
+      "ap40": 0.32558160322029206,
+      "f1_max": 0.454173018292683,
+      "conf_at_max": 0.2,
+      "sweep": [
+        {
+          "threshold": 0.05,
+          "precision": 0.2146652497343252,
+          "recall": 0.5913457140243344,
+          "f1": 0.3149867212435738
+        },
+        {
+          "threshold": 0.1,
+          "precision": 0.2754512157451128,
+          "recall": 0.5710365016924344,
+          "f1": 0.3716361038342463
+        },
+        {
+          "threshold": 0.15,
+          "precision": 0.3701457110832729,
+          "recall": 0.5135852163571494,
+          "f1": 0.43022453827879525
+        },
+        {
+          "threshold": 0.2,
+          "precision": 0.4738097604611868,
+          "recall": 0.4360991675052603,
+          "f1": 0.454173018292683
+        },
+        {
+          "threshold": 0.25,
+          "precision": 0.5588592233009708,
+          "recall": 0.3370231451834233,
+          "f1": 0.4204759458996747
+        },
+        {
+          "threshold": 0.3,
+          "precision": 0.625465549348231,
+          "recall": 0.24581465556673682,
+          "f1": 0.3529257240428187
+        },
+        {
+          "threshold": 0.35,
+          "precision": 0.6698039215686274,
+          "recall": 0.156252858841826,
+          "f1": 0.25339366515837103
+        },
+        {
+          "threshold": 0.4,
+          "precision": 0.6791298436437797,
+          "recall": 0.09139145549355045,
+          "f1": 0.16110304789550073
+        },
+        {
+          "threshold": 0.45,
+          "precision": 0.686046511627907,
+          "recall": 0.048577440307382674,
+          "f1": 0.09073045706962836
+        },
+        {
+          "threshold": 0.5,
+          "precision": 0.675,
+          "recall": 0.022230354038971733,
+          "f1": 0.04304313169781242
+        },
+        {
+          "threshold": 0.55,
+          "precision": 0.6418918918918919,
+          "recall": 0.008690879151038331,
+          "f1": 0.017149562234858744
+        },
+        {
+          "threshold": 0.6,
+          "precision": 0.7272727272727273,
+          "recall": 0.002927454029823438,
+          "f1": 0.005831435079726652
+        },
+        {
+          "threshold": 0.65,
+          "precision": 0.6363636363636364,
+          "recall": 0.000640380569023877,
+          "f1": 0.0012794735880095047
+        },
+        {
+          "threshold": 0.7,
+          "precision": 0.5,
+          "recall": 9.148293843198243e-05,
+          "f1": 0.00018293240647580719
+        },
+        {
+          "threshold": 0.75,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        {
+          "threshold": 0.8,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        {
+          "threshold": 0.85,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        {
+          "threshold": 0.9,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        {
+          "threshold": 0.95,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        }
+      ],
+      "units": [
+        {
+          "unit_id": "hot-val-30352-31225-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 17,
+          "fp": 42,
+          "fn": 13
+        },
+        {
+          "unit_id": "hot-val-30353-31222-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 38,
+          "fp": 124,
+          "fn": 18
+        },
+        {
+          "unit_id": "hot-val-30353-31223-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 127,
+          "fp": 247,
+          "fn": 30
+        },
+        {
+          "unit_id": "hot-val-30353-31224-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 254,
+          "fp": 702,
+          "fn": 82
+        },
+        {
+          "unit_id": "hot-val-30353-31225-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 566,
+          "fp": 986,
+          "fn": 206
+        },
+        {
+          "unit_id": "hot-val-30353-31226-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 71,
+          "fp": 93,
+          "fn": 47
+        },
+        {
+          "unit_id": "hot-val-30353-31226-1",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 3,
+          "fp": 6,
+          "fn": 0
+        },
+        {
+          "unit_id": "hot-val-30354-31221-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 166,
+          "fp": 584,
+          "fn": 43
+        },
+        {
+          "unit_id": "hot-val-30354-31222-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 425,
+          "fp": 1034,
+          "fn": 290
+        },
+        {
+          "unit_id": "hot-val-30354-31223-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 13,
+          "fp": 939,
+          "fn": 5
+        },
+        {
+          "unit_id": "hot-val-30354-31224-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 274,
+          "fp": 695,
+          "fn": 187
+        },
+        {
+          "unit_id": "hot-val-30354-31225-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 369,
+          "fp": 685,
+          "fn": 334
+        },
+        {
+          "unit_id": "hot-val-30354-31226-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 77,
+          "fp": 75,
+          "fn": 40
+        },
+        {
+          "unit_id": "hot-val-30355-31221-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 280,
+          "fp": 880,
+          "fn": 190
+        },
+        {
+          "unit_id": "hot-val-30355-31222-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 200,
+          "fp": 1073,
+          "fn": 262
+        },
+        {
+          "unit_id": "hot-val-30355-31223-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 411,
+          "fp": 1342,
+          "fn": 356
+        },
+        {
+          "unit_id": "hot-val-30355-31224-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 247,
+          "fp": 929,
+          "fn": 325
+        },
+        {
+          "unit_id": "hot-val-30355-31225-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 398,
+          "fp": 1135,
+          "fn": 337
+        },
+        {
+          "unit_id": "hot-val-30355-31226-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 37,
+          "fp": 131,
+          "fn": 29
+        },
+        {
+          "unit_id": "hot-val-30356-31221-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 370,
+          "fp": 673,
+          "fn": 73
+        },
+        {
+          "unit_id": "hot-val-30356-31222-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 91,
+          "fp": 584,
+          "fn": 52
+        },
+        {
+          "unit_id": "hot-val-30356-31223-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 386,
+          "fp": 911,
+          "fn": 298
+        },
+        {
+          "unit_id": "hot-val-30356-31224-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 665,
+          "fp": 1209,
+          "fn": 928
+        },
+        {
+          "unit_id": "hot-val-30356-31225-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 601,
+          "fp": 1046,
+          "fn": 406
+        },
+        {
+          "unit_id": "hot-val-30356-31226-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 51,
+          "fp": 55,
+          "fn": 26
+        },
+        {
+          "unit_id": "hot-val-30357-31221-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 9,
+          "fp": 38,
+          "fn": 15
+        },
+        {
+          "unit_id": "hot-val-30357-31222-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 3,
+          "fp": 8,
+          "fn": 2
+        },
+        {
+          "unit_id": "hot-val-30357-31224-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 21,
+          "fp": 47,
+          "fn": 14
+        },
+        {
+          "unit_id": "hot-val-30357-31225-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 54,
+          "fp": 122,
+          "fn": 71
+        },
+        {
+          "unit_id": "hot-val-30357-31226-0",
+          "meta": {
+            "source": "hot",
+            "biome": "Tropical & Subtropical Moist Broadleaf Forests",
+            "zoom": "20"
+          },
+          "tp": 18,
+          "fp": 24,
+          "fn": 10
+        }
+      ],
+      "breakdown": {
+        "source": {
+          "hot": {
+            "precision": 0.2754512157451128,
+            "recall": 0.5710365016924344,
+            "f1": 0.3716361038342463,
+            "n_units": 30
+          }
+        },
+        "biome": {
+          "Tropical & Subtropical Moist Broadleaf Forests": {
+            "precision": 0.2754512157451128,
+            "recall": 0.5710365016924344,
+            "f1": 0.3716361038342463,
+            "n_units": 30
+          }
+        },
+        "zoom": {
+          "20": {
+            "precision": 0.2754512157451128,
+            "recall": 0.5710365016924344,
+            "f1": 0.3716361038342463,
+            "n_units": 30
+          }
+        }
+      },
+      "f1_ci95": [
+        0.33213612402977316,
+        0.40693166483129495
+      ],
+      "window_m": 60.0
+    },
+    "neon": {
+      "confidence_threshold": 0.1,
+      "iou_threshold": 0.4,
+      "precision": 0.7355163727959698,
+      "recall": 0.6163123775064073,
+      "f1": 0.6706586826347305,
+      "aoi_f1": 0.6646060018732526,
+      "ap40": 0.5695108485267405,
+      "f1_max": 0.6736787654108113,
+      "conf_at_max": 0.15,
+      "sweep": [
+        {
+          "threshold": 0.05,
+          "precision": 0.6990537343697195,
+          "recall": 0.623699683401176,
+          "f1": 0.6592303402119354
+        },
+        {
+          "threshold": 0.1,
+          "precision": 0.7355163727959698,
+          "recall": 0.6163123775064073,
+          "f1": 0.6706586826347305
+        },
+        {
+          "threshold": 0.15,
+          "precision": 0.7867498993153443,
+          "recall": 0.589024574099201,
+          "f1": 0.6736787654108113
+        },
+        {
+          "threshold": 0.2,
+          "precision": 0.8284745762711865,
+          "recall": 0.5526910900045229,
+          "f1": 0.663049376017363
+        },
+        {
+          "threshold": 0.25,
+          "precision": 0.8652012711864406,
+          "recall": 0.4925373134328358,
+          "f1": 0.6277260063406667
+        },
+        {
+          "threshold": 0.3,
+          "precision": 0.9066433566433566,
+          "recall": 0.39092416704357,
+          "f1": 0.546297271673865
+        },
+        {
+          "threshold": 0.35,
+          "precision": 0.9372592184920198,
+          "recall": 0.256746570179406,
+          "f1": 0.4030769230769231
+        },
+        {
+          "threshold": 0.4,
+          "precision": 0.9702085402184707,
+          "recall": 0.14729383386099804,
+          "f1": 0.2557591623036649
+        },
+        {
+          "threshold": 0.45,
+          "precision": 0.9823529411764705,
+          "recall": 0.07553143374038897,
+          "f1": 0.14027719445611087
+        },
+        {
+          "threshold": 0.5,
+          "precision": 1.0,
+          "recall": 0.03844414292175486,
+          "f1": 0.0740418118466899
+        },
+        {
+          "threshold": 0.55,
+          "precision": 1.0,
+          "recall": 0.020202020202020204,
+          "f1": 0.03960396039603961
+        },
+        {
+          "threshold": 0.6,
+          "precision": 1.0,
+          "recall": 0.010854816824966078,
+          "f1": 0.021476510067114093
+        },
+        {
+          "threshold": 0.65,
+          "precision": 1.0,
+          "recall": 0.005879692446856626,
+          "f1": 0.011690647482014387
+        },
+        {
+          "threshold": 0.7,
+          "precision": 1.0,
+          "recall": 0.0021106588270767375,
+          "f1": 0.004212426658642997
+        },
+        {
+          "threshold": 0.75,
+          "precision": 1.0,
+          "recall": 0.0006030453791647821,
+          "f1": 0.0012053638692180201
+        },
+        {
+          "threshold": 0.8,
+          "precision": 1.0,
+          "recall": 0.00015076134479119553,
+          "f1": 0.0003014772384684956
+        },
+        {
+          "threshold": 0.85,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        {
+          "threshold": 0.9,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        },
+        {
+          "threshold": 0.95,
+          "precision": 0.0,
+          "recall": 0.0,
+          "f1": 0.0
+        }
+      ],
+      "units": [
+        {
+          "unit_id": "2018_SJER_3_252000_4104000_image_628",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 6,
+          "fp": 0,
+          "fn": 2
+        },
+        {
+          "unit_id": "2018_SJER_3_252000_4106000_image_234",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_252000_4106000_image_326",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 2,
+          "fp": 0,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_SJER_3_252000_4106000_image_66",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 1,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_SJER_3_252000_4107000_image_372",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 2,
+          "fp": 2,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_252000_4107000_image_477",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 0,
+          "fn": 2
+        },
+        {
+          "unit_id": "2018_SJER_3_252000_4108000_image_517",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 8,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_252000_4112000_image_451",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 6,
+          "fp": 4,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_SJER_3_252000_4113000_image_323",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 0,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_SJER_3_253000_4104000_image_637",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 0,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_SJER_3_253000_4105000_image_303",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_253000_4105000_image_72",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 1,
+          "fn": 3
+        },
+        {
+          "unit_id": "2018_SJER_3_253000_4107000_image_532",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 1,
+          "fp": 4,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_253000_4107000_image_637",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 11,
+          "fp": 5,
+          "fn": 3
+        },
+        {
+          "unit_id": "2018_SJER_3_253000_4109000_image_573",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 2,
+          "fp": 2,
+          "fn": 3
+        },
+        {
+          "unit_id": "2018_SJER_3_253000_4112000_image_581",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 2,
+          "fp": 1,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_254000_4104000_image_163",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_254000_4105000_image_703",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 2,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_254000_4107000_image_670",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 10,
+          "fp": 5,
+          "fn": 4
+        },
+        {
+          "unit_id": "2018_SJER_3_254000_4108000_image_188",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_254000_4108000_image_700",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_254000_4109000_image_337",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_254000_4112000_image_145",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 2,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_SJER_3_255000_4105000_image_142",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 3,
+          "fn": 4
+        },
+        {
+          "unit_id": "2018_SJER_3_255000_4107000_image_298",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 6,
+          "fp": 2,
+          "fn": 4
+        },
+        {
+          "unit_id": "2018_SJER_3_255000_4107000_image_369",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 1,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_SJER_3_255000_4108000_image_224",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_SJER_3_255000_4108000_image_256",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 6,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_SJER_3_255000_4108000_image_267",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 6,
+          "fp": 0,
+          "fn": 3
+        },
+        {
+          "unit_id": "2018_SJER_3_255000_4108000_image_93",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 9,
+          "fp": 1,
+          "fn": 6
+        },
+        {
+          "unit_id": "2018_TEAK_3_314000_4099000_image_334",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 19,
+          "fp": 17,
+          "fn": 6
+        },
+        {
+          "unit_id": "2018_TEAK_3_314000_4108000_image_86",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 6,
+          "fp": 6,
+          "fn": 3
+        },
+        {
+          "unit_id": "2018_TEAK_3_315000_4096000_image_163",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 11,
+          "fp": 6,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_TEAK_3_315000_4101000_image_600",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 12,
+          "fp": 3,
+          "fn": 3
+        },
+        {
+          "unit_id": "2018_TEAK_3_315000_4103000_image_87",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 29,
+          "fp": 11,
+          "fn": 19
+        },
+        {
+          "unit_id": "2018_TEAK_3_315000_4107000_image_237",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 18,
+          "fp": 4,
+          "fn": 4
+        },
+        {
+          "unit_id": "2018_TEAK_3_316000_4091000_image_446",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 5,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_316000_4092000_image_620",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 8,
+          "fp": 2,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_316000_4093000_image_59",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 37,
+          "fp": 6,
+          "fn": 6
+        },
+        {
+          "unit_id": "2018_TEAK_3_316000_4095000_image_397",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 44,
+          "fp": 6,
+          "fn": 12
+        },
+        {
+          "unit_id": "2018_TEAK_3_316000_4097000_image_35",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 27,
+          "fp": 6,
+          "fn": 10
+        },
+        {
+          "unit_id": "2018_TEAK_3_316000_4097000_image_493",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 34,
+          "fp": 7,
+          "fn": 47
+        },
+        {
+          "unit_id": "2018_TEAK_3_317000_4105000_image_542",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 20,
+          "fp": 9,
+          "fn": 4
+        },
+        {
+          "unit_id": "2018_TEAK_3_318000_4102000_image_483",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 6,
+          "fp": 1,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_318000_4103000_image_261",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 6,
+          "fp": 4,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_318000_4106000_image_165",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 6,
+          "fp": 9,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_318000_4107000_image_416",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 3,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_318000_4107000_image_718",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 1,
+          "fp": 2,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_319000_4095000_image_175",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "2018_TEAK_3_319000_4102000_image_281",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 22,
+          "fp": 10,
+          "fn": 5
+        },
+        {
+          "unit_id": "2018_TEAK_3_320000_4093000_image_222",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 16,
+          "fp": 7,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_320000_4094000_image_587",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 39,
+          "fp": 3,
+          "fn": 14
+        },
+        {
+          "unit_id": "2018_TEAK_3_320000_4095000_image_616",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 41,
+          "fp": 5,
+          "fn": 12
+        },
+        {
+          "unit_id": "2018_TEAK_3_321000_4101000_image_689",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 10,
+          "fp": 8,
+          "fn": 6
+        },
+        {
+          "unit_id": "2018_TEAK_3_322000_4096000_image_368",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 31,
+          "fp": 7,
+          "fn": 4
+        },
+        {
+          "unit_id": "2018_TEAK_3_322000_4097000_image_216",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 1,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_322000_4102000_image_495",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 8,
+          "fp": 6,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_322000_4103000_image_50",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 14,
+          "fp": 4,
+          "fn": 13
+        },
+        {
+          "unit_id": "2018_TEAK_3_322000_4107000_image_518",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 1,
+          "fn": 2
+        },
+        {
+          "unit_id": "2018_TEAK_3_323000_4093000_image_159",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 7,
+          "fp": 5,
+          "fn": 2
+        },
+        {
+          "unit_id": "2018_TEAK_3_323000_4098000_image_691",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 2,
+          "fn": 0
+        },
+        {
+          "unit_id": "2018_TEAK_3_323000_4101000_image_415",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 32,
+          "fp": 10,
+          "fn": 12
+        },
+        {
+          "unit_id": "2018_TEAK_3_324000_4095000_image_275",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 17,
+          "fp": 15,
+          "fn": 3
+        },
+        {
+          "unit_id": "ABBY_063_2019",
+          "meta": {
+            "source": "neon",
+            "site": "ABBY",
+            "zoom": "native"
+          },
+          "tp": 47,
+          "fp": 8,
+          "fn": 10
+        },
+        {
+          "unit_id": "ABBY_076_2019",
+          "meta": {
+            "source": "neon",
+            "site": "ABBY",
+            "zoom": "native"
+          },
+          "tp": 82,
+          "fp": 14,
+          "fn": 21
+        },
+        {
+          "unit_id": "BART_036_2019",
+          "meta": {
+            "source": "neon",
+            "site": "BART",
+            "zoom": "native"
+          },
+          "tp": 30,
+          "fp": 32,
+          "fn": 12
+        },
+        {
+          "unit_id": "BART_050_2019",
+          "meta": {
+            "source": "neon",
+            "site": "BART",
+            "zoom": "native"
+          },
+          "tp": 38,
+          "fp": 19,
+          "fn": 13
+        },
+        {
+          "unit_id": "BLAN_005_2019",
+          "meta": {
+            "source": "neon",
+            "site": "BLAN",
+            "zoom": "native"
+          },
+          "tp": 28,
+          "fp": 24,
+          "fn": 5
+        },
+        {
+          "unit_id": "BLAN_009_2019",
+          "meta": {
+            "source": "neon",
+            "site": "BLAN",
+            "zoom": "native"
+          },
+          "tp": 23,
+          "fp": 14,
+          "fn": 16
+        },
+        {
+          "unit_id": "BONA_005_2019",
+          "meta": {
+            "source": "neon",
+            "site": "BONA",
+            "zoom": "native"
+          },
+          "tp": 40,
+          "fp": 8,
+          "fn": 19
+        },
+        {
+          "unit_id": "BONA_012_2019",
+          "meta": {
+            "source": "neon",
+            "site": "BONA",
+            "zoom": "native"
+          },
+          "tp": 50,
+          "fp": 10,
+          "fn": 32
+        },
+        {
+          "unit_id": "BONA_014_2019",
+          "meta": {
+            "source": "neon",
+            "site": "BONA",
+            "zoom": "native"
+          },
+          "tp": 45,
+          "fp": 9,
+          "fn": 18
+        },
+        {
+          "unit_id": "BONA_018_2019",
+          "meta": {
+            "source": "neon",
+            "site": "BONA",
+            "zoom": "native"
+          },
+          "tp": 26,
+          "fp": 11,
+          "fn": 25
+        },
+        {
+          "unit_id": "CLBJ_040_2018",
+          "meta": {
+            "source": "neon",
+            "site": "CLBJ",
+            "zoom": "native"
+          },
+          "tp": 34,
+          "fp": 3,
+          "fn": 18
+        },
+        {
+          "unit_id": "CLBJ_042_2018",
+          "meta": {
+            "source": "neon",
+            "site": "CLBJ",
+            "zoom": "native"
+          },
+          "tp": 40,
+          "fp": 14,
+          "fn": 24
+        },
+        {
+          "unit_id": "DELA_015_2019",
+          "meta": {
+            "source": "neon",
+            "site": "DELA",
+            "zoom": "native"
+          },
+          "tp": 30,
+          "fp": 18,
+          "fn": 12
+        },
+        {
+          "unit_id": "DELA_047_2019",
+          "meta": {
+            "source": "neon",
+            "site": "DELA",
+            "zoom": "native"
+          },
+          "tp": 33,
+          "fp": 15,
+          "fn": 12
+        },
+        {
+          "unit_id": "DSNY_002_2018",
+          "meta": {
+            "source": "neon",
+            "site": "DSNY",
+            "zoom": "native"
+          },
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "DSNY_005_2018",
+          "meta": {
+            "source": "neon",
+            "site": "DSNY",
+            "zoom": "native"
+          },
+          "tp": 0,
+          "fp": 4,
+          "fn": 1
+        },
+        {
+          "unit_id": "DSNY_006_2018",
+          "meta": {
+            "source": "neon",
+            "site": "DSNY",
+            "zoom": "native"
+          },
+          "tp": 13,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "DSNY_007_2018",
+          "meta": {
+            "source": "neon",
+            "site": "DSNY",
+            "zoom": "native"
+          },
+          "tp": 1,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "DSNY_012_2018",
+          "meta": {
+            "source": "neon",
+            "site": "DSNY",
+            "zoom": "native"
+          },
+          "tp": 13,
+          "fp": 1,
+          "fn": 10
+        },
+        {
+          "unit_id": "DSNY_025_2018",
+          "meta": {
+            "source": "neon",
+            "site": "DSNY",
+            "zoom": "native"
+          },
+          "tp": 29,
+          "fp": 9,
+          "fn": 17
+        },
+        {
+          "unit_id": "HARV_037_2018",
+          "meta": {
+            "source": "neon",
+            "site": "HARV",
+            "zoom": "native"
+          },
+          "tp": 46,
+          "fp": 9,
+          "fn": 18
+        },
+        {
+          "unit_id": "HARV_040_2018",
+          "meta": {
+            "source": "neon",
+            "site": "HARV",
+            "zoom": "native"
+          },
+          "tp": 33,
+          "fp": 13,
+          "fn": 15
+        },
+        {
+          "unit_id": "HARV_041_2018",
+          "meta": {
+            "source": "neon",
+            "site": "HARV",
+            "zoom": "native"
+          },
+          "tp": 47,
+          "fp": 9,
+          "fn": 12
+        },
+        {
+          "unit_id": "JERC_047_2018",
+          "meta": {
+            "source": "neon",
+            "site": "JERC",
+            "zoom": "native"
+          },
+          "tp": 16,
+          "fp": 19,
+          "fn": 6
+        },
+        {
+          "unit_id": "JERC_048_2018",
+          "meta": {
+            "source": "neon",
+            "site": "JERC",
+            "zoom": "native"
+          },
+          "tp": 12,
+          "fp": 13,
+          "fn": 4
+        },
+        {
+          "unit_id": "JERC_055_2018",
+          "meta": {
+            "source": "neon",
+            "site": "JERC",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 7,
+          "fn": 2
+        },
+        {
+          "unit_id": "JERC_056_2018",
+          "meta": {
+            "source": "neon",
+            "site": "JERC",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 3,
+          "fn": 3
+        },
+        {
+          "unit_id": "JERC_058_2018",
+          "meta": {
+            "source": "neon",
+            "site": "JERC",
+            "zoom": "native"
+          },
+          "tp": 10,
+          "fp": 11,
+          "fn": 2
+        },
+        {
+          "unit_id": "JERC_059_2018",
+          "meta": {
+            "source": "neon",
+            "site": "JERC",
+            "zoom": "native"
+          },
+          "tp": 22,
+          "fp": 12,
+          "fn": 15
+        },
+        {
+          "unit_id": "LENO_016_2019",
+          "meta": {
+            "source": "neon",
+            "site": "LENO",
+            "zoom": "native"
+          },
+          "tp": 18,
+          "fp": 23,
+          "fn": 10
+        },
+        {
+          "unit_id": "LENO_066_2019",
+          "meta": {
+            "source": "neon",
+            "site": "LENO",
+            "zoom": "native"
+          },
+          "tp": 29,
+          "fp": 23,
+          "fn": 18
+        },
+        {
+          "unit_id": "MLBS_061_2018",
+          "meta": {
+            "source": "neon",
+            "site": "MLBS",
+            "zoom": "native"
+          },
+          "tp": 46,
+          "fp": 11,
+          "fn": 31
+        },
+        {
+          "unit_id": "MLBS_062_2018",
+          "meta": {
+            "source": "neon",
+            "site": "MLBS",
+            "zoom": "native"
+          },
+          "tp": 37,
+          "fp": 9,
+          "fn": 22
+        },
+        {
+          "unit_id": "MLBS_063_2018",
+          "meta": {
+            "source": "neon",
+            "site": "MLBS",
+            "zoom": "native"
+          },
+          "tp": 36,
+          "fp": 8,
+          "fn": 19
+        },
+        {
+          "unit_id": "MLBS_064_2018",
+          "meta": {
+            "source": "neon",
+            "site": "MLBS",
+            "zoom": "native"
+          },
+          "tp": 42,
+          "fp": 8,
+          "fn": 28
+        },
+        {
+          "unit_id": "MLBS_069_2018",
+          "meta": {
+            "source": "neon",
+            "site": "MLBS",
+            "zoom": "native"
+          },
+          "tp": 40,
+          "fp": 12,
+          "fn": 20
+        },
+        {
+          "unit_id": "MLBS_071_2018",
+          "meta": {
+            "source": "neon",
+            "site": "MLBS",
+            "zoom": "native"
+          },
+          "tp": 35,
+          "fp": 9,
+          "fn": 19
+        },
+        {
+          "unit_id": "MLBS_073_2018",
+          "meta": {
+            "source": "neon",
+            "site": "MLBS",
+            "zoom": "native"
+          },
+          "tp": 35,
+          "fp": 11,
+          "fn": 18
+        },
+        {
+          "unit_id": "MLBS_074_2018",
+          "meta": {
+            "source": "neon",
+            "site": "MLBS",
+            "zoom": "native"
+          },
+          "tp": 32,
+          "fp": 14,
+          "fn": 21
+        },
+        {
+          "unit_id": "NIWO_001_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 71,
+          "fp": 13,
+          "fn": 105
+        },
+        {
+          "unit_id": "NIWO_002_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 81,
+          "fp": 32,
+          "fn": 211
+        },
+        {
+          "unit_id": "NIWO_004_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 43,
+          "fp": 25,
+          "fn": 64
+        },
+        {
+          "unit_id": "NIWO_005_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 72,
+          "fp": 20,
+          "fn": 74
+        },
+        {
+          "unit_id": "NIWO_010_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 69,
+          "fp": 13,
+          "fn": 79
+        },
+        {
+          "unit_id": "NIWO_011_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 68,
+          "fp": 20,
+          "fn": 85
+        },
+        {
+          "unit_id": "NIWO_012_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 77,
+          "fp": 4,
+          "fn": 59
+        },
+        {
+          "unit_id": "NIWO_014_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 61,
+          "fp": 30,
+          "fn": 118
+        },
+        {
+          "unit_id": "NIWO_015_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 65,
+          "fp": 14,
+          "fn": 85
+        },
+        {
+          "unit_id": "NIWO_016_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 59,
+          "fp": 13,
+          "fn": 75
+        },
+        {
+          "unit_id": "NIWO_017_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 84,
+          "fp": 11,
+          "fn": 67
+        },
+        {
+          "unit_id": "NIWO_042_2018",
+          "meta": {
+            "source": "neon",
+            "site": "NIWO",
+            "zoom": "native"
+          },
+          "tp": 0,
+          "fp": 8,
+          "fn": 5
+        },
+        {
+          "unit_id": "ONAQ_021_2019",
+          "meta": {
+            "source": "neon",
+            "site": "ONAQ",
+            "zoom": "native"
+          },
+          "tp": 21,
+          "fp": 10,
+          "fn": 11
+        },
+        {
+          "unit_id": "OSBS_003_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 40,
+          "fp": 9,
+          "fn": 29
+        },
+        {
+          "unit_id": "OSBS_008_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 37,
+          "fp": 4,
+          "fn": 23
+        },
+        {
+          "unit_id": "OSBS_011_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 44,
+          "fp": 7,
+          "fn": 19
+        },
+        {
+          "unit_id": "OSBS_015_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 16,
+          "fp": 8,
+          "fn": 5
+        },
+        {
+          "unit_id": "OSBS_022_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 2,
+          "fp": 6,
+          "fn": 1
+        },
+        {
+          "unit_id": "OSBS_023_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 5,
+          "fn": 1
+        },
+        {
+          "unit_id": "OSBS_028_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 26,
+          "fp": 5,
+          "fn": 9
+        },
+        {
+          "unit_id": "OSBS_029_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 39,
+          "fp": 9,
+          "fn": 24
+        },
+        {
+          "unit_id": "OSBS_032_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 18,
+          "fp": 6,
+          "fn": 19
+        },
+        {
+          "unit_id": "OSBS_033_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 23,
+          "fp": 13,
+          "fn": 14
+        },
+        {
+          "unit_id": "OSBS_037_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 17,
+          "fp": 9,
+          "fn": 9
+        },
+        {
+          "unit_id": "OSBS_039_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 24,
+          "fp": 7,
+          "fn": 5
+        },
+        {
+          "unit_id": "OSBS_040_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 25,
+          "fp": 9,
+          "fn": 17
+        },
+        {
+          "unit_id": "OSBS_051_2019",
+          "meta": {
+            "source": "neon",
+            "site": "OSBS",
+            "zoom": "native"
+          },
+          "tp": 7,
+          "fp": 6,
+          "fn": 1
+        },
+        {
+          "unit_id": "SCBI_046_2019",
+          "meta": {
+            "source": "neon",
+            "site": "SCBI",
+            "zoom": "native"
+          },
+          "tp": 22,
+          "fp": 21,
+          "fn": 19
+        },
+        {
+          "unit_id": "SCBI_047_2019",
+          "meta": {
+            "source": "neon",
+            "site": "SCBI",
+            "zoom": "native"
+          },
+          "tp": 22,
+          "fp": 25,
+          "fn": 10
+        },
+        {
+          "unit_id": "SERC_004_2019",
+          "meta": {
+            "source": "neon",
+            "site": "SERC",
+            "zoom": "native"
+          },
+          "tp": 24,
+          "fp": 33,
+          "fn": 24
+        },
+        {
+          "unit_id": "SERC_062_2019",
+          "meta": {
+            "source": "neon",
+            "site": "SERC",
+            "zoom": "native"
+          },
+          "tp": 30,
+          "fp": 18,
+          "fn": 16
+        },
+        {
+          "unit_id": "SJER_002_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 0,
+          "fn": 1
+        },
+        {
+          "unit_id": "SJER_003_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 5,
+          "fn": 5
+        },
+        {
+          "unit_id": "SJER_004_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 1,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "SJER_005_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 2,
+          "fn": 1
+        },
+        {
+          "unit_id": "SJER_009_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "SJER_010_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 9,
+          "fp": 6,
+          "fn": 2
+        },
+        {
+          "unit_id": "SJER_012_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 1,
+          "fp": 1,
+          "fn": 0
+        },
+        {
+          "unit_id": "SJER_015_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 0,
+          "fn": 0
+        },
+        {
+          "unit_id": "SJER_016_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "SJER_021_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 1,
+          "fn": 0
+        },
+        {
+          "unit_id": "SJER_022_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 0,
+          "fn": 2
+        },
+        {
+          "unit_id": "SJER_025_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 14,
+          "fp": 6,
+          "fn": 4
+        },
+        {
+          "unit_id": "SJER_026_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 2,
+          "fp": 5,
+          "fn": 0
+        },
+        {
+          "unit_id": "SJER_045_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 11,
+          "fp": 2,
+          "fn": 4
+        },
+        {
+          "unit_id": "SJER_046_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 9,
+          "fp": 4,
+          "fn": 5
+        },
+        {
+          "unit_id": "SJER_048_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "SJER_049_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 5,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "SJER_050_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 10,
+          "fp": 4,
+          "fn": 5
+        },
+        {
+          "unit_id": "SJER_051_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 8,
+          "fp": 4,
+          "fn": 5
+        },
+        {
+          "unit_id": "SJER_052_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 7,
+          "fp": 0,
+          "fn": 2
+        },
+        {
+          "unit_id": "SJER_053_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 8,
+          "fp": 1,
+          "fn": 3
+        },
+        {
+          "unit_id": "SJER_054_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 8,
+          "fp": 1,
+          "fn": 2
+        },
+        {
+          "unit_id": "SJER_055_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 8,
+          "fp": 6,
+          "fn": 8
+        },
+        {
+          "unit_id": "SJER_056_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 1,
+          "fn": 1
+        },
+        {
+          "unit_id": "SJER_057_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 8,
+          "fp": 6,
+          "fn": 7
+        },
+        {
+          "unit_id": "SJER_058_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 9,
+          "fp": 1,
+          "fn": 3
+        },
+        {
+          "unit_id": "SJER_059_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 10,
+          "fn": 3
+        },
+        {
+          "unit_id": "SJER_060_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 1,
+          "fn": 2
+        },
+        {
+          "unit_id": "SJER_062_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 3,
+          "fp": 0,
+          "fn": 2
+        },
+        {
+          "unit_id": "SJER_063_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 13,
+          "fp": 2,
+          "fn": 0
+        },
+        {
+          "unit_id": "SJER_064_2018",
+          "meta": {
+            "source": "neon",
+            "site": "SJER",
+            "zoom": "native"
+          },
+          "tp": 4,
+          "fp": 4,
+          "fn": 2
+        },
+        {
+          "unit_id": "SOAP_031_2019",
+          "meta": {
+            "source": "neon",
+            "site": "SOAP",
+            "zoom": "native"
+          },
+          "tp": 42,
+          "fp": 8,
+          "fn": 17
+        },
+        {
+          "unit_id": "SOAP_056_2019",
+          "meta": {
+            "source": "neon",
+            "site": "SOAP",
+            "zoom": "native"
+          },
+          "tp": 25,
+          "fp": 16,
+          "fn": 30
+        },
+        {
+          "unit_id": "TALL_017_2019",
+          "meta": {
+            "source": "neon",
+            "site": "TALL",
+            "zoom": "native"
+          },
+          "tp": 26,
+          "fp": 9,
+          "fn": 5
+        },
+        {
+          "unit_id": "TALL_043_2019",
+          "meta": {
+            "source": "neon",
+            "site": "TALL",
+            "zoom": "native"
+          },
+          "tp": 35,
+          "fp": 6,
+          "fn": 23
+        },
+        {
+          "unit_id": "TEAK_043_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 20,
+          "fp": 12,
+          "fn": 4
+        },
+        {
+          "unit_id": "TEAK_044_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 32,
+          "fp": 11,
+          "fn": 4
+        },
+        {
+          "unit_id": "TEAK_045_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 24,
+          "fp": 16,
+          "fn": 15
+        },
+        {
+          "unit_id": "TEAK_046_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 20,
+          "fp": 11,
+          "fn": 19
+        },
+        {
+          "unit_id": "TEAK_047_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 24,
+          "fp": 7,
+          "fn": 12
+        },
+        {
+          "unit_id": "TEAK_049_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 23,
+          "fp": 3,
+          "fn": 2
+        },
+        {
+          "unit_id": "TEAK_050_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 32,
+          "fp": 11,
+          "fn": 16
+        },
+        {
+          "unit_id": "TEAK_051_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 30,
+          "fp": 8,
+          "fn": 22
+        },
+        {
+          "unit_id": "TEAK_052_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 37,
+          "fp": 16,
+          "fn": 36
+        },
+        {
+          "unit_id": "TEAK_053_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 14,
+          "fp": 3,
+          "fn": 6
+        },
+        {
+          "unit_id": "TEAK_054_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 21,
+          "fp": 7,
+          "fn": 10
+        },
+        {
+          "unit_id": "TEAK_055_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 15,
+          "fp": 4,
+          "fn": 4
+        },
+        {
+          "unit_id": "TEAK_057_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 44,
+          "fp": 5,
+          "fn": 16
+        },
+        {
+          "unit_id": "TEAK_058_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 24,
+          "fp": 7,
+          "fn": 11
+        },
+        {
+          "unit_id": "TEAK_059_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 43,
+          "fp": 3,
+          "fn": 29
+        },
+        {
+          "unit_id": "TEAK_060_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 32,
+          "fp": 4,
+          "fn": 13
+        },
+        {
+          "unit_id": "TEAK_061_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 31,
+          "fp": 8,
+          "fn": 10
+        },
+        {
+          "unit_id": "TEAK_062_2018",
+          "meta": {
+            "source": "neon",
+            "site": "TEAK",
+            "zoom": "native"
+          },
+          "tp": 28,
+          "fp": 5,
+          "fn": 11
+        },
+        {
+          "unit_id": "UNDE_001_2017",
+          "meta": {
+            "source": "neon",
+            "site": "UNDE",
+            "zoom": "native"
+          },
+          "tp": 39,
+          "fp": 16,
+          "fn": 27
+        },
+        {
+          "unit_id": "UNDE_006_2017",
+          "meta": {
+            "source": "neon",
+            "site": "UNDE",
+            "zoom": "native"
+          },
+          "tp": 38,
+          "fp": 22,
+          "fn": 14
+        },
+        {
+          "unit_id": "UNDE_065_2017",
+          "meta": {
+            "source": "neon",
+            "site": "UNDE",
+            "zoom": "native"
+          },
+          "tp": 53,
+          "fp": 13,
+          "fn": 15
+        },
+        {
+          "unit_id": "WREF_070_2019",
+          "meta": {
+            "source": "neon",
+            "site": "WREF",
+            "zoom": "native"
+          },
+          "tp": 36,
+          "fp": 19,
+          "fn": 19
+        },
+        {
+          "unit_id": "WREF_072_2019",
+          "meta": {
+            "source": "neon",
+            "site": "WREF",
+            "zoom": "native"
+          },
+          "tp": 15,
+          "fp": 19,
+          "fn": 5
+        },
+        {
+          "unit_id": "WREF_075_2019",
+          "meta": {
+            "source": "neon",
+            "site": "WREF",
+            "zoom": "native"
+          },
+          "tp": 40,
+          "fp": 16,
+          "fn": 9
+        },
+        {
+          "unit_id": "WREF_083_2019",
+          "meta": {
+            "source": "neon",
+            "site": "WREF",
+            "zoom": "native"
+          },
+          "tp": 22,
+          "fp": 12,
+          "fn": 3
+        },
+        {
+          "unit_id": "WREF_084_2019",
+          "meta": {
+            "source": "neon",
+            "site": "WREF",
+            "zoom": "native"
+          },
+          "tp": 27,
+          "fp": 17,
+          "fn": 2
+        }
+      ],
+      "breakdown": {
+        "source": {
+          "neon": {
+            "precision": 0.7355163727959698,
+            "recall": 0.6163123775064073,
+            "f1": 0.6706586826347305,
+            "n_units": 194
+          }
+        },
+        "site": {
+          "SJER": {
+            "precision": 0.7364705882352941,
+            "recall": 0.7330210772833724,
+            "f1": 0.7347417840375587,
+            "n_units": 61
+          },
+          "TEAK": {
+            "precision": 0.7572886297376094,
+            "recall": 0.7077656675749319,
+            "f1": 0.7316901408450704,
+            "n_units": 51
+          },
+          "ABBY": {
+            "precision": 0.8543046357615894,
+            "recall": 0.80625,
+            "f1": 0.8295819935691318,
+            "n_units": 2
+          },
+          "BART": {
+            "precision": 0.5714285714285714,
+            "recall": 0.7311827956989247,
+            "f1": 0.6415094339622641,
+            "n_units": 2
+          },
+          "BLAN": {
+            "precision": 0.5730337078651685,
+            "recall": 0.7083333333333334,
+            "f1": 0.6335403726708074,
+            "n_units": 2
+          },
+          "BONA": {
+            "precision": 0.8090452261306532,
+            "recall": 0.6313725490196078,
+            "f1": 0.709251101321586,
+            "n_units": 4
+          },
+          "CLBJ": {
+            "precision": 0.8131868131868132,
+            "recall": 0.6379310344827587,
+            "f1": 0.714975845410628,
+            "n_units": 2
+          },
+          "DELA": {
+            "precision": 0.65625,
+            "recall": 0.7241379310344828,
+            "f1": 0.6885245901639345,
+            "n_units": 2
+          },
+          "DSNY": {
+            "precision": 0.7808219178082192,
+            "recall": 0.6551724137931034,
+            "f1": 0.7125,
+            "n_units": 6
+          },
+          "HARV": {
+            "precision": 0.802547770700637,
+            "recall": 0.7368421052631579,
+            "f1": 0.7682926829268293,
+            "n_units": 3
+          },
+          "JERC": {
+            "precision": 0.5149253731343284,
+            "recall": 0.6831683168316832,
+            "f1": 0.5872340425531916,
+            "n_units": 6
+          },
+          "LENO": {
+            "precision": 0.5053763440860215,
+            "recall": 0.6266666666666667,
+            "f1": 0.5595238095238095,
+            "n_units": 2
+          },
+          "MLBS": {
+            "precision": 0.787012987012987,
+            "recall": 0.6299376299376299,
+            "f1": 0.6997690531177829,
+            "n_units": 8
+          },
+          "NIWO": {
+            "precision": 0.7869884575026233,
+            "recall": 0.4220596510973551,
+            "f1": 0.5494505494505494,
+            "n_units": 12
+          },
+          "ONAQ": {
+            "precision": 0.6774193548387096,
+            "recall": 0.65625,
+            "f1": 0.6666666666666667,
+            "n_units": 1
+          },
+          "OSBS": {
+            "precision": 0.7570754716981132,
+            "recall": 0.6458752515090543,
+            "f1": 0.6970684039087948,
+            "n_units": 14
+          },
+          "SCBI": {
+            "precision": 0.4888888888888889,
+            "recall": 0.6027397260273972,
+            "f1": 0.5398773006134968,
+            "n_units": 2
+          },
+          "SERC": {
+            "precision": 0.5142857142857142,
+            "recall": 0.574468085106383,
+            "f1": 0.5427135678391959,
+            "n_units": 2
+          },
+          "SOAP": {
+            "precision": 0.7362637362637363,
+            "recall": 0.5877192982456141,
+            "f1": 0.6536585365853659,
+            "n_units": 2
+          },
+          "TALL": {
+            "precision": 0.8026315789473685,
+            "recall": 0.6853932584269663,
+            "f1": 0.7393939393939394,
+            "n_units": 2
+          },
+          "UNDE": {
+            "precision": 0.7182320441988951,
+            "recall": 0.6989247311827957,
+            "f1": 0.7084468664850138,
+            "n_units": 3
+          },
+          "WREF": {
+            "precision": 0.6278026905829597,
+            "recall": 0.7865168539325843,
+            "f1": 0.6982543640897756,
+            "n_units": 5
+          }
+        },
+        "zoom": {
+          "native": {
+            "precision": 0.7355163727959698,
+            "recall": 0.6163123775064073,
+            "f1": 0.6706586826347305,
+            "n_units": 194
+          }
+        }
+      },
+      "f1_ci95": [
+        0.6425300732550278,
+        0.6953826141852745
+      ],
+      "forgetting_lower_bound": 0.6383679323173042,
+      "forgetting_pass": true
+    }
+  }
+}
