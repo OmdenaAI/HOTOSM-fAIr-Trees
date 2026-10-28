@@ -24,6 +24,12 @@ def test_label_free_tiles_edge_touch_is_not_overlap():
     assert free.tolist() == [[False, True]]
 
 
+@pytest.mark.parametrize("label", [(-50, 10, -10, 40), (600, 10, 640, 40), (512, 10, 540, 40)])
+def test_label_free_tiles_ignores_labels_outside_the_mosaic(label):
+    free = teacher.label_free_tiles(np.array([label], float), np.ones((256, 512), bool), 256)
+    assert free.tolist() == [[True, True]]
+
+
 def test_select_teacher_drops_boxes_on_labels():
     labels = np.array([[10, 10, 20, 20]], float)
     boxes = np.array([[15, 15, 25, 25], [20, 0, 30, 10]], float)
@@ -115,6 +121,36 @@ def test_write_teacher_sets_creates_missing_ignore(monkeypatch, write_region, tm
         (region,) = load_regions(tmp_path / "out" / name)
         assert region.ignore_path is not None
         assert len(_features(region.ignore_path)) == 1
+
+
+def test_teacher_features_skip_boxes_already_masked(monkeypatch, write_region, tmp_path):
+    write_region(
+        "t",
+        tiles=((0, 0), (1, 0)),
+        root=tmp_path / "hot",
+        boxes_px=[(10, 10, 40, 40)],
+        ignore_px=[(290, 40, 340, 90)],  # e.g. a tree group
+    )
+    # centred inside the existing ignore square; off every label in the labelled tile 0
+    _stub_predictions(monkeypatch, [(300, 50, 330, 80), (100, 100, 130, 130)], [0.5, 0.6])
+    (region,) = load_regions(tmp_path / "hot")
+
+    features, counts = teacher.teacher_features(region, None, PARAMS)
+
+    assert [f["properties"]["score"] for f in features["all"]] == [0.6]
+    assert features["label_free"] == []
+    assert counts["already_masked"] == 1 and counts["all"] == 1 and counts["label_free"] == 0
+
+
+def test_teacher_features_count_tiles_over_the_mask_limit(monkeypatch, write_region, tmp_path):
+    write_region("t", tiles=((0, 0), (1, 0)), root=tmp_path / "hot", boxes_px=[(10, 10, 40, 40)])
+    _stub_predictions(monkeypatch, [(256, 0, 506, 250)], [0.9])  # 95% of the label-free tile 1
+    (region,) = load_regions(tmp_path / "hot")
+
+    _, counts = teacher.teacher_features(region, None, PARAMS)
+
+    assert counts["tiles"] == 2
+    assert counts["tiles_over_max_masked"] == {"existing": 0, "all": 1, "label_free": 1}
 
 
 def test_teacher_features_cover_every_mosaic_of_a_region(monkeypatch, write_region, tmp_path):
