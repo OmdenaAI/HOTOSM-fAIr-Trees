@@ -2,6 +2,7 @@ import csv
 import dataclasses
 import json
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -267,3 +268,40 @@ def test_resume_without_a_readable_checkpoint_is_refused(monkeypatch, regions, w
     with pytest.raises(RuntimeError, match="no readable checkpoint"):
         _run(monkeypatch, script, regions, weights, out)
     assert script.calls == 0 and {p.name: p.read_bytes() for p in out.iterdir()} == before
+
+
+def _stub_reports(monkeypatch, by_source):
+    calls = []
+
+    def fake_evaluate_units(run_fn, units, params):
+        calls.append([u.meta["source"] for u in units])
+        f1, ap = by_source[units[0].meta["source"]]
+        return SimpleNamespace(f1_max=f1, conf_at_max=0.3, ap40=ap, aoi_f1=f1)
+
+    monkeypatch.setattr(T, "evaluate_units", fake_evaluate_units)
+    return calls
+
+
+def _units(*sources):
+    return [SimpleNamespace(meta={"source": s}) for s in sources]
+
+
+def test_validate_balances_sources(monkeypatch):
+    calls = _stub_reports(monkeypatch, {"a": (0.8, 0.6), "b": (0.2, 0.4)})
+
+    units = _units("a", "b", "a", "b")
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    assert v["f1_max"] == pytest.approx(0.5) and v["ap40"] == pytest.approx(0.5)
+    assert v["f1_max/a"] == 0.8 and v["f1_max/b"] == 0.2 and v["ap40/a"] == 0.6
+    assert sorted(calls) == [["a", "a"], ["b", "b"]]
+
+
+def test_validate_single_source_unchanged(monkeypatch):
+    calls = _stub_reports(monkeypatch, {"a": (0.7, 0.5)})
+
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), _units("a", "a"), InferenceParams(), 0)
+
+    assert calls == [["a", "a"]]
+    assert set(v) == {"f1_max", "conf_at_max", "ap40", "aoi_f1", "seconds"}
+    assert v["f1_max"] == 0.7

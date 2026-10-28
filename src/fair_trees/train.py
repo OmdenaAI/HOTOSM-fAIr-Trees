@@ -313,17 +313,25 @@ def amp_dtype(device: torch.device, amp: bool) -> torch.dtype | None:
 def _validate(
     model: RetinaNet, device: torch.device, units: Sequence[EvalUnit], params: InferenceParams, epoch: int
 ) -> dict:
-    """Val metrics through the serving decode path; puts the model back in train mode."""
+    """Val metrics through the serving decode path; puts the model back in train mode.
+
+    When the units come from several sources, each source is scored on its own and the scores are the
+    equal-weight means over sources (with ``f1_max/<source>`` and ``ap40/<source>`` alongside), so a large
+    source cannot drown out a small one in early stopping.
+    """
     t0 = time.monotonic()
-    report = evaluate_units(torch_run_fn(model, device), units, params)
+    run_fn = torch_run_fn(model, device)
+    by_source: dict[str, list[EvalUnit]] = {}
+    for u in units:
+        by_source.setdefault(u.meta["source"], []).append(u)
+    reports = {s: evaluate_units(run_fn, us, params) for s, us in sorted(by_source.items())}
     model.train()
-    return {
-        "f1_max": report.f1_max,
-        "conf_at_max": report.conf_at_max,
-        "ap40": report.ap40,
-        "aoi_f1": report.aoi_f1,
-        "seconds": time.monotonic() - t0,
-    }
+    keys = ("f1_max", "conf_at_max", "ap40", "aoi_f1")
+    metrics = {k: float(np.mean([getattr(r, k) for r in reports.values()])) for k in keys}
+    if len(reports) > 1:
+        for s, r in reports.items():
+            metrics |= {f"f1_max/{s}": r.f1_max, f"ap40/{s}": r.ap40}
+    return metrics | {"seconds": time.monotonic() - t0}
 
 
 def _load_scaler_state(scaler: torch.amp.GradScaler, state: Mapping) -> None:
@@ -385,7 +393,8 @@ def train(
     repo_sha: str = "",
     manifest_hash: str = "",
 ) -> TrainResult:
-    """Train from `weights` with early stopping on val f1_max; resumes from the newest checkpoint.
+    """Train from `weights` with early stopping on val f1_max (the mean over sources when val mixes
+    sources); resumes from the newest checkpoint.
 
     The epoch plan is regenerated from (seed, epoch) on resume, so an interrupted run trains on the same
     samples as an uninterrupted one. A finished run returns its result without training.
