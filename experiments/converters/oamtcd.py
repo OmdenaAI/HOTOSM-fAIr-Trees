@@ -34,6 +34,7 @@ from shapely.geometry import box, mapping
 
 from experiments.leakage import box_distance_m
 from experiments.tiler import tile_scene
+from fair_trees.dataset import MAX_MASKED
 from fair_trees.georef import tile_bounds_4326, true_gsd
 from fair_trees.preprocess import read_chip
 
@@ -111,7 +112,11 @@ def category_ids(annotations: Iterable[Sequence[Mapping]]) -> dict[str, int]:
 
 
 def _canopy_pixels(segmentation) -> shapely.Geometry:
-    """Canopy outline in pixel coordinates from COCO polygons or an RLE mask."""
+    """Canopy outline in pixel coordinates from COCO polygons or an RLE mask.
+
+    A mask's outline is a pixel staircase (tens of thousands of corners on a large canopy); it is simplified
+    to within 1 px, which keeps the ignore files small and the per-crop rasterisation fast.
+    """
     if isinstance(segmentation, Mapping):
         mask = decode_rle(segmentation)
         parts = [
@@ -119,6 +124,7 @@ def _canopy_pixels(segmentation) -> shapely.Geometry:
             for g, v in rasterio.features.shapes(mask.astype(np.uint8), mask=mask)
             if v == 1
         ]
+        return shapely.simplify(shapely.union_all(parts), 1.0) if parts else shapely.Polygon()
     else:
         parts = [
             shapely.Polygon(np.asarray(ring, float).reshape(-1, 2)).buffer(0)
@@ -145,7 +151,8 @@ def tile_features(
 ) -> tuple[list[dict], list[dict], dict]:
     """Label features (tree boxes) and ignore features (large trees, canopy minus trees), in EPSG:4326.
 
-    ``gsd_m`` is the tile's ground metres per pixel, for the ``MAX_TREE_SIDE_M`` limit.
+    ``gsd_m`` is the tile's ground metres per pixel, for the ``MAX_TREE_SIDE_M`` limit. The counts include
+    ``ignore_px``, the masked area in pixels (the union of the ignore features).
     """
     trees, large, canopy_px = [], [], []
     for a in annotations:
@@ -161,14 +168,20 @@ def tile_features(
     tree_union = shapely.union_all(trees) if trees else shapely.Polygon()
     labels = [_feature(_to_4326(g, transform, crs), {"label": 1, "source": SOURCE}) for g in trees]
     ignore = [_feature(_to_4326(g, transform, crs), {"reason": "large_tree"}) for g in large]
-    n_canopy = 0
+    masked = list(large)
     for geom in canopy_px:
         rest = geom.difference(tree_union) if trees else geom
         if rest.is_empty or rest.area <= 0:
             continue
         ignore.append(_feature(_to_4326(rest, transform, crs), {"reason": "canopy"}))
-        n_canopy += 1
-    return labels, ignore, {"trees": len(trees), "large_trees": len(large), "canopy": n_canopy}
+        masked.append(rest)
+    counts = {
+        "trees": len(trees),
+        "large_trees": len(large),
+        "canopy": len(masked) - len(large),
+        "ignore_px": float(shapely.union_all(masked).area) if masked else 0.0,
+    }
+    return labels, ignore, counts
 
 
 def _feature(geometry: dict, properties: dict) -> dict:
@@ -193,9 +206,9 @@ def _split(row: Mapping) -> str:
     return "val" if int(row["validation_fold"]) == 0 else "train"
 
 
-def _write_json(path: Path, obj: dict) -> None:
+def _write_json(path: Path, obj: dict, *, indent: int | None = 2) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(obj, indent=2))
+    path.write_text(json.dumps(obj, indent=indent))
 
 
 def _write_tif(path: Path, image: bytes, transform: Affine, crs) -> None:
@@ -234,9 +247,14 @@ def convert(
     totals = Counter()
     area_m2 = dict.fromkeys(_SPLITS, 0.0)
     invalid_shares: list[float] = []
+    over_max_masked = dict.fromkeys(_SPLITS, 0)
+    seen: set[str] = set()
     for row in rows:
         licence = LICENCES[row["dataset"]]
         region_id = f"{SOURCE}-{ID_PREFIX[row['dataset']]}-{row['image_id']}"
+        if region_id in seen:
+            raise ValueError(f"{region_id}: image id {row['image_id']} appears twice in {row['dataset']}")
+        seen.add(region_id)
         crs = CRS.from_user_input(row["crs"])
         minx, miny, maxx, maxy = (float(v) for v in row["bounds"])
         width, height = int(row["width"]), int(row["height"])
@@ -253,6 +271,16 @@ def convert(
         west, south, east, north = transform_bounds(crs, "EPSG:4326", minx, miny, maxx, maxy)
         lon, lat = (west + east) / 2, (south + north) / 2
         source_gsd = px * math.cos(math.radians(lat))  # a Mercator metre shrinks by cos(lat) on the ground
+        split = _split(row)
+        anns = json.loads(row["coco_annotations"] or "[]")
+        labels, ignore, counts = tile_features(anns, transform, crs, ids, gsd_m=source_gsd)
+        ignore_share = counts["ignore_px"] / (width * height)
+        if ignore_share > MAX_MASKED:
+            if split == "train":
+                # the sampler redraws crops over MAX_MASKED: such a tile only yields mostly-black fallbacks
+                totals["dropped_mostly_masked"] += 1
+                continue
+            over_max_masked[split] += 1
         tif = work_dir / f"{region_id}.tif"
         _write_tif(tif, row["image"], transform, crs)
         tiled = tile_scene(tif, work_dir / region_id, source_gsd=source_gsd, zooms=zooms)
@@ -261,7 +289,6 @@ def convert(
             totals["no_chips"] += 1
             continue
 
-        split = _split(row)
         region_dir = out_root / region_id
         lowest = min(tiled)
         valid_area = 0.0
@@ -278,12 +305,15 @@ def convert(
             chips[str(z)][split] += len(paths)
         shutil.rmtree(work_dir / region_id, ignore_errors=True)
 
-        anns = json.loads(row["coco_annotations"] or "[]")
-        labels, ignore, counts = tile_features(anns, transform, crs, ids, gsd_m=source_gsd)
         for f in labels:
             f["properties"] |= {"licence": licence, "region": region_id}
-        _write_json(region_dir / "labels.geojson", {"type": "FeatureCollection", "features": labels})
-        _write_json(region_dir / "ignore.geojson", {"type": "FeatureCollection", "features": ignore})
+        # compact: canopy outlines run to thousands of vertices, and every crop re-reads the vectors
+        _write_json(
+            region_dir / "labels.geojson", {"type": "FeatureCollection", "features": labels}, indent=None
+        )
+        _write_json(
+            region_dir / "ignore.geojson", {"type": "FeatureCollection", "features": ignore}, indent=None
+        )
         footprint = transform_geom(crs, "EPSG:4326", mapping(box(minx, miny, maxx, maxy)))
         meta = {
             "id": region_id,
@@ -294,6 +324,7 @@ def convert(
             "zooms": sorted(tiled),
             "footprint": footprint,
             "valid_area_m2": valid_area,
+            "ignore_share": ignore_share,
         }
         _write_json(region_dir / "region.json", meta)
         regions[split][licence] = regions[split].get(licence, 0) + 1
@@ -310,6 +341,8 @@ def convert(
         "large_trees": totals["large_trees"],
         "canopy_masks": totals["canopy_masks"],
         "dropped_near_hot": totals["dropped_near_hot"],
+        "dropped_mostly_masked": totals["dropped_mostly_masked"],
+        "regions_over_max_masked": over_max_masked,
         "no_chips": totals["no_chips"],
         "categories": dict(ids),
         "masked_pct": round(float(np.mean(invalid_shares)) * 100, 1) if invalid_shares else 0.0,

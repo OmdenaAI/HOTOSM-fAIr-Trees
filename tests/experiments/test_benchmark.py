@@ -64,6 +64,17 @@ def test_regions_part_lists_split_unit_ids(oamtcd_root):
     }
 
 
+def test_regions_part_builds_one_region_at_a_time(oamtcd_root, monkeypatch):
+    import fair_trees.evaluate as ev
+
+    sizes, real = [], ev.region_units
+    monkeypatch.setattr(
+        ev, "region_units", lambda regions, **kw: sizes.append(len(regions)) or real(regions, **kw)
+    )
+    regions_part(oamtcd_root, "oamtcd", split="test", zooms=[20, 19], window_m=40.0, frozen_on="2026-10-29")
+    assert sizes == [1, 1]  # never every test mosaic in memory at once
+
+
 def test_cli_freezes_a_regions_part_once(oamtcd_root, tmp_path):
     bench = tmp_path / "benchmark.json"
     argv = [

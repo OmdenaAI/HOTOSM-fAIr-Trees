@@ -86,7 +86,8 @@ def regions_part(
         "split": split,
         "zooms": list(zooms),
         "window_m": float(window_m),
-        "unit_ids": [u.unit_id for u in region_units(regions, zooms=zooms)],
+        # one region at a time: only the ids are needed, never every mosaic in memory at once
+        "unit_ids": [u.unit_id for r in regions for u in region_units([r], zooms=zooms)],
         "frozen_on": frozen_on,
     }
 

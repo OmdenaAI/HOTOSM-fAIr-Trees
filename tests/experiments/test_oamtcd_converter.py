@@ -82,7 +82,7 @@ def _lonlat(px, py):
 
 def test_tile_features_places_tree_boxes():
     labels, ignore, counts = oamtcd.tile_features([_ann(2, (100, 200, 40, 30))], TRANSFORM, CRS, IDS)
-    assert ignore == [] and counts == {"trees": 1, "large_trees": 0, "canopy": 0}
+    assert ignore == [] and counts == {"trees": 1, "large_trees": 0, "canopy": 0, "ignore_px": 0.0}
     west, south, east, north = _shape(labels[0]).bounds
     x1, y2 = TRANSFORM @ (100, 230)
     x2, y1 = TRANSFORM @ (140, 200)
@@ -127,19 +127,38 @@ def _rle_list(mask):
 
 def test_tile_features_rle_canopy():
     mask = np.zeros((512, 512), bool)
-    mask[100:150, 100] = True
+    mask[100:150, 100:110] = True
     assert (oamtcd.decode_rle(_rle_list(mask)) == mask).all()
     anns = [
         {
             "category_id": 1,
-            "bbox": [100, 100, 1, 50],
+            "bbox": [100, 100, 10, 50],
             "segmentation": _rle_list(mask),
             "area": 0,
             "iscrowd": 1,
         }
     ]
     _, ignore, counts = oamtcd.tile_features(anns, TRANSFORM, CRS, IDS)
-    assert counts["canopy"] == 1 and _shape(ignore[0]).contains(_lonlat(100.5, 125))
+    assert counts["canopy"] == 1 and _shape(ignore[0]).contains(_lonlat(105, 125))
+
+
+def test_tile_features_simplifies_rle_canopy_outlines():
+    yy, xx = np.mgrid[:512, :512]
+    disk = (yy - 256) ** 2 + (xx - 256) ** 2 < 200**2  # its pixel outline is a staircase of ~1,600 corners
+    anns = [{"category_id": 1, "bbox": [56, 56, 400, 400], "segmentation": _rle_list(disk), "iscrowd": 1}]
+    _, ignore, counts = oamtcd.tile_features(anns, TRANSFORM, CRS, IDS)
+    assert shapely.get_num_coordinates(_shape(ignore[0])) < 200
+    assert counts["ignore_px"] == pytest.approx(disk.sum(), rel=0.01)
+
+
+def test_tile_features_reports_masked_pixels():
+    anns = [
+        _ann(1, (0, 0, 300, 300)),
+        _ann(2, (50, 50, 20, 20)),
+        _ann(2, (400, 0, 350, 10)),
+    ]  # + a large tree
+    _, _, counts = oamtcd.tile_features(anns, TRANSFORM, CRS, IDS)
+    assert counts["ignore_px"] == pytest.approx(300 * 300 - 20 * 20 + 350 * 10)
 
 
 def test_near_hot_uses_ground_metres():
@@ -205,6 +224,25 @@ def test_convert_writes_regions_and_stats(tmp_path):
     assert stats["dropped_near_hot"] == 1 and stats["tree_boxes"] == 4 and stats["categories"] == IDS
     assert json.loads((out / "stats.json").read_text()) == stats
     assert not (tmp_path / "work" / "oamtcd-by-1.tif").exists()
+
+
+def test_convert_drops_mostly_masked_train_tiles_only(tmp_path):
+    canopy = [_ann(1, (0, 0, SIDE, int(SIDE * 0.9)))]  # 90% of the tile
+    rows = [_row(1, fold=2, anns=canopy), _row(2, hf_split="test", fold=-1, anns=canopy, x0=X0 + 1000)]
+
+    stats = oamtcd.convert(rows, tmp_path / "oamtcd", ids=IDS, hot_bbox_4326=FAR_HOT, work_dir=tmp_path / "w")
+
+    (region,) = load_regions(tmp_path / "oamtcd")
+    assert region.id == "oamtcd-by-2" and stats["dropped_mostly_masked"] == 1
+    meta = json.loads((region.labels_path.parent / "region.json").read_text())
+    assert meta["ignore_share"] == pytest.approx(0.9, abs=0.01)
+    assert stats["regions_over_max_masked"] == {"train": 0, "val": 0, "test": 1}
+
+
+def test_convert_refuses_a_repeated_image_id(tmp_path):
+    rows = [_row(1), _row(1, hf_split="test", fold=-1, x0=X0 + 1000)]
+    with pytest.raises(ValueError, match="oamtcd-by-1"):
+        oamtcd.convert(rows, tmp_path / "oamtcd", ids=IDS, hot_bbox_4326=FAR_HOT, work_dir=tmp_path / "w")
 
 
 def test_convert_refuses_a_non_empty_output(tmp_path):
