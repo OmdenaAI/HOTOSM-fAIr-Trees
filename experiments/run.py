@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import subprocess
+from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -55,8 +56,24 @@ def load_config(path: Path) -> dict:
             raise ValueError(f"{path}: config lacks {key}")
     conf["hyperparameters"] = conf.get("hyperparameters") or {}
     conf["val"] = {**DEFAULT_VAL, **(conf.get("val") or {})}
+    _check_max_regions(path, conf["val"]["max_regions"])
     conf.setdefault("mlflow", True)
     return conf
+
+
+def _check_max_regions(path: Path, value) -> None:
+    """``val.max_regions`` is None, an int >= 1, or a mapping of source -> int >= 1."""
+
+    def positive_int(v) -> bool:
+        return isinstance(v, int) and not isinstance(v, bool) and v >= 1
+
+    if value is None or positive_int(value):
+        return
+    if isinstance(value, dict) and all(isinstance(k, str) and positive_int(v) for k, v in value.items()):
+        return
+    raise ValueError(
+        f"{path}: val max_regions must be an int >= 1 or a mapping source -> int >= 1, got {value!r}"
+    )
 
 
 def _stored_config(path: Path) -> dict:
@@ -88,14 +105,26 @@ def repo_sha() -> str:
 
 
 def _regions(conf: Mapping, data_root: Path) -> tuple[list, list]:
-    """(train, val) regions of the configured sources; val sorted by id and cut to ``max_regions``."""
+    """(train, val) regions of the configured sources; val sorted by id and cut to ``max_regions``.
+
+    An int ``max_regions`` cuts the pooled list; a mapping ``{source: n}`` keeps the first ``n`` val regions
+    (by id) of each named source and all of the others.
+    """
     from fair_trees.dataset import load_regions
 
     regions = [r for s in conf["sources"] for r in load_regions(Path(data_root) / s)]
     train = [r for r in regions if r.split == "train"]
     val = sorted((r for r in regions if r.split == "val"), key=lambda r: r.id)
     max_regions = conf["val"]["max_regions"]
-    if max_regions is not None:
+    if isinstance(max_regions, Mapping):
+        kept: Counter[str] = Counter()
+        capped = []
+        for r in val:
+            if r.source not in max_regions or kept[r.source] < max_regions[r.source]:
+                capped.append(r)
+                kept[r.source] += 1
+        val = capped
+    elif max_regions is not None:
         val = val[:max_regions]
     return train, val
 
@@ -235,17 +264,24 @@ def _run_fn(weights: Path, device: str | None) -> "RunFn":
 
 
 def _benchmark_parts(benchmark: Path, data_root: Path) -> Iterator[tuple[str, dict, list]]:
-    """(name, part, units) for each NEON eval-plot part whose data is staged; units must match the freeze."""
+    """(name, part, units) for each NEON eval-plot or region part whose data is staged; units must match
+    the freeze."""
     from experiments.neon_eval import load_eval_plots
+    from fair_trees.dataset import load_regions
+    from fair_trees.evaluate import region_units
 
     for name, part in json.loads(Path(benchmark).read_text())["parts"].items():
-        if part["kind"] != "neon_eval_plots":
+        if part["kind"] not in ("neon_eval_plots", "regions"):
             continue
         root = Path(data_root) / part["data_dir"]
         if not root.exists():
             logger.warning(f"benchmark part {name}: {root} not staged, skipped")
             continue
-        units = load_eval_plots(root)
+        if part["kind"] == "regions":
+            regions = [r for r in load_regions(root) if r.split == part["split"]]
+            units = region_units(regions, zooms=part["zooms"])
+        else:
+            units = load_eval_plots(root)
         if [u.unit_id for u in units] != part["unit_ids"]:
             raise ValueError(f"benchmark part {name}: units differ from the frozen list")
         yield name, part, units
@@ -267,9 +303,13 @@ def evaluate(
     weights: Path | None = None,
     device: str | None = None,
 ) -> dict:
-    """Score a run on its val regions and on the frozen NEON benchmark parts; writes ``eval.json``."""
+    """Score a run on its val regions and on the frozen benchmark parts that are staged; writes ``eval.json``.
+
+    NEON eval-plot parts carry the forgetting bound; region parts are report-only.
+    """
     from experiments.neon_eval import DF_COMPAT
     from fair_trees.evaluate import evaluate_regions, evaluate_units
+    from fair_trees.params import InferenceParams
 
     out_dir = Path(drive_root) / "runs" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -285,6 +325,10 @@ def evaluate(
     report = evaluate_regions(run_fn, val, params, zooms=conf["val"]["zooms"])
     parts = {"val": _with_ci(report) | {"window_m": params.window_m}}
     for name, part, units in _benchmark_parts(benchmark, data_root):
+        if part["kind"] == "regions":  # report-only: no forgetting bound
+            report = evaluate_units(run_fn, units, InferenceParams(window_m=part["window_m"]))
+            parts[name] = _with_ci(report) | {"window_m": part["window_m"]}
+            continue
         report = evaluate_units(run_fn, units, DF_COMPAT, ignore=False)
         lower = float(part["release_f1_ci95"][0])
         parts[name] = _with_ci(report) | {
@@ -311,7 +355,8 @@ def export(
     from fair_trees.train import build_model, torch_run_fn
 
     out_dir = Path(drive_root) / "runs" / run_id
-    units = [u for _, _, us in _benchmark_parts(benchmark, data_root) for u in us][:PARITY_UNITS]
+    neon = (us for _, part, us in _benchmark_parts(benchmark, data_root) if part["kind"] == "neon_eval_plots")
+    units = [u for us in neon for u in us][:PARITY_UNITS]
     if not units:
         raise ValueError(
             f"{benchmark}: no staged NEON benchmark units under {data_root} for the parity check"

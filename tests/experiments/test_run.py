@@ -229,6 +229,81 @@ def test_evaluate_writes_parts(monkeypatch, setup, fake_session):
     assert "f1_ci95" in neon and "f1_ci95" in out["parts"]["val"]
 
 
+def _val_conf(max_regions):
+    return {"sources": ["neon", "oamtcd"], "val": {**run.DEFAULT_VAL, "max_regions": max_regions}}
+
+
+def test_val_cap_per_source(write_region, tmp_path):
+    data = tmp_path / "data"
+    write_region("n1", tiles=((0, 0),), root=data / "neon", source="neon", split="val")
+    write_region("o1", tiles=((2, 0),), root=data / "oamtcd", source="oamtcd", split="val")
+    write_region("o2", tiles=((4, 0),), root=data / "oamtcd", source="oamtcd", split="val")
+
+    def val_ids(max_regions):
+        return [r.id for r in run._regions(_val_conf(max_regions), data)[1]]
+
+    assert val_ids({"oamtcd": 1}) == ["n1", "o1"]
+    assert val_ids({"other": 1}) == ["n1", "o1", "o2"]
+    assert val_ids(2) == ["n1", "o1"]
+    assert val_ids(None) == ["n1", "o1", "o2"]
+
+
+@pytest.mark.parametrize("bad", ["{oamtcd: 0}", "{oamtcd: x}", "0", "[1]"])
+def test_load_config_validates_max_regions(tmp_path, bad):
+    p = tmp_path / "c.yaml"
+    p.write_text(CONFIG.replace("max_regions: null", f"max_regions: {bad}"))
+    with pytest.raises(ValueError, match="max_regions"):
+        run.load_config(p)
+
+
+def _add_regions_part(bench, **changes):
+    data = json.loads(bench.read_text())
+    part = {
+        "kind": "regions",
+        "data_dir": "oamtcd",
+        "split": "test",
+        "zooms": [20, 19],
+        "window_m": 40.0,
+        "unit_ids": ["t1"],
+        "frozen_on": "2026-10-29",
+    }
+    data["parts"]["oamtcd"] = part | changes
+    bench.write_text(json.dumps(data))
+
+
+def test_evaluate_scores_a_regions_part(monkeypatch, setup, write_region, fake_session):
+    data, drive, _, bench = setup
+    oamtcd = data / "oamtcd"
+    write_region(
+        "t1", tiles=((8, 0),), root=oamtcd, source="oamtcd", split="test", boxes_px=[(2100, 30, 2130, 60)]
+    )
+    _add_regions_part(bench)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+
+    out = run.evaluate("r1", bench, drive_root=drive, data_root=data)
+
+    part = out["parts"]["oamtcd"]
+    assert "f1" in part and "f1_ci95" in part and part["window_m"] == 40.0
+    assert "forgetting_pass" not in part
+    assert [u["unit_id"] for u in part["units"]] == ["t1"]
+
+
+def test_evaluate_skips_an_unstaged_regions_part(monkeypatch, setup, fake_session):
+    data, drive, _, bench = setup
+    _add_regions_part(bench)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+    assert set(run.evaluate("r1", bench, drive_root=drive, data_root=data)["parts"]) == {"val", "neon"}
+
+
+def test_regions_part_units_must_match_freeze(monkeypatch, setup, write_region, fake_session):
+    data, drive, _, bench = setup
+    write_region("t1", tiles=((8, 0),), root=data / "oamtcd", source="oamtcd", split="test")
+    _add_regions_part(bench, unit_ids=["t9"])
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+    with pytest.raises(ValueError, match="frozen"):
+        run.evaluate("r1", bench, drive_root=drive, data_root=data)
+
+
 def test_evaluate_refuses_changed_benchmark_units(monkeypatch, setup, fake_session):
     data, drive, _, bench = setup
     _plot(data / "NeonTreeEvaluation", "SITE_003", [])

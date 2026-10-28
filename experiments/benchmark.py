@@ -72,6 +72,25 @@ def neon_part(
     }
 
 
+def regions_part(
+    data_root: Path, data_dir: str, *, split: str, zooms: Sequence[int], window_m: float, frozen_on: str
+) -> dict:
+    """A report-only part over the staged regions of one split, one unit per region mosaic."""
+    from fair_trees.dataset import load_regions
+    from fair_trees.evaluate import region_units
+
+    regions = [r for r in load_regions(Path(data_root) / data_dir) if r.split == split]
+    return {
+        "kind": "regions",
+        "data_dir": data_dir,
+        "split": split,
+        "zooms": list(zooms),
+        "window_m": float(window_m),
+        "unit_ids": [u.unit_id for u in region_units(regions, zooms=zooms)],
+        "frozen_on": frozen_on,
+    }
+
+
 def cli(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m experiments.benchmark", description=__doc__.splitlines()[0]
@@ -84,9 +103,31 @@ def cli(argv: Sequence[str] | None = None) -> None:
     p.add_argument("--release-eval", type=Path, required=True)
     p.add_argument("--frozen-on", required=True)
     p.add_argument("--benchmark", type=Path, default=BENCHMARK)
+    p = sub.add_parser("freeze-regions", help="freeze a report-only part over staged regions of one split")
+    p.add_argument("--data-root", type=Path, required=True)
+    p.add_argument("--data-dir", required=True, help="the staged source folder; also the part's name")
+    p.add_argument("--split", required=True)
+    p.add_argument("--zooms", type=int, nargs="+", default=[20, 19])
+    p.add_argument("--window-m", type=float, default=40.0)
+    p.add_argument("--frozen-on", required=True)
+    p.add_argument("--benchmark", type=Path, default=BENCHMARK)
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    if args.command == "freeze-regions":
+        part = regions_part(
+            args.data_root,
+            args.data_dir,
+            split=args.split,
+            zooms=args.zooms,
+            window_m=args.window_m,
+            frozen_on=args.frozen_on,
+        )
+        frozen = freeze_part(args.benchmark, args.data_dir, part)
+        print(
+            f"{args.data_dir}: {len(frozen['unit_ids'])} units, unit_ids_sha256 {frozen['unit_ids_sha256']}"
+        )
+        return
     part = neon_part(
         args.data_root,
         args.data_dir,
