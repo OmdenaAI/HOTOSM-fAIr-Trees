@@ -149,3 +149,45 @@ mask became `reason: "teacher"` ignore squares. Val regions are unchanged.
 - Contact sheet (`shards/hot-teacher-all/qa-teacher-contact-sheet.png`): in canopy the squares sit on crowns; in built-up
   tiles some sit on roofs, mostly blue ones and tarps, so the sets also stop training from correcting those false
   positives.
+
+## OAM-TCD on Drive (Colab conversion)
+
+Written by `experiments/notebooks/colab_convert_oamtcd.ipynb` to `MyDrive/fair_trees/shards/oamtcd/`.
+
+| Item | URL | Revision | Licence |
+|---|---|---|---|
+| `restor/tcd` (7 train parquets, 1 test parquet) | https://huggingface.co/datasets/restor/tcd | `d97d4da0ebbb6e249ae95ac5e19656babd972eb2` | CC-BY-4.0 |
+| `restor/tcd-nc` (1 train parquet, 1 test parquet) | https://huggingface.co/datasets/restor/tcd-nc | `7c2c9b42e5e71a45eee7657842861db5836f8778` | CC-BY-NC-4.0 |
+
+`restor/tcd-sa` (CC-BY-SA) is not read. Each region's licence comes from the dataset it was read from; the `license`
+column says CC-BY on every `restor/tcd` row.
+
+### What is converted
+
+- **Regions.** One per OAM-TCD tile (`oamtcd-by-<image_id>`, `oamtcd-nc-<image_id>`), cut into z19 and z20 chips.
+  The tiles are EPSG:3395 at 0.1 CRS units per pixel, so on the ground a pixel is 0.1 × cos(lat) m (6.3 cm at 51°N).
+- **Labels.** Category 2 (tree, checked from the data: about 5× more instances, smaller boxes) as its COCO box.
+  A tree box over 30 m on the ground is masked (`large_tree`).
+- **Ignore.** Category 1 (canopy, tree groups) with the tree boxes inside cut out; RLE outlines simplified to 1 px.
+- **Splits.** Validation fold 0 → `val`, folds 1–4 → `train`, the Hugging Face test split → `test` (benchmark only).
+  Train tiles more than 80% masked are dropped (the sampler cannot draw a crop from them); val and test keep theirs.
+- **HOT leakage.** Tiles within 1 km of the bounding box of HOT's tiles are dropped (none were).
+- The dataset's `lat` and `lon` columns are swapped; they are not used.
+
+### Conversion run (2026-10-29, code 6082119721ca8825fb580d9ba4e51638eca28d42)
+
+| Split | Regions (CC-BY / CC-BY-NC) | z19 chips | z20 chips |
+| --- | --- | --- | --- |
+| train | 3,126 / 212 | 30,502 | 105,058 |
+| val | 828 / 22 | 7,766 | 26,392 |
+| test | 439 / 35 | 4,406 | 15,096 |
+
+- 281,865 tree boxes, 54,188 canopy masks, 166 trees over 30 m masked; 218 train tiles dropped as mostly masked; 45
+  val and 25 test tiles are over 80% masked (kept); 0 tiles near HOT. `val_share` 0.169; nodata share of chips 23.1%.
+- Shard manifest sha256 `e332731b6297b620b753f80e6ef49622e9b7558f38dfc3cc9237856d9ef352c1`.
+- Drive-to-`/content` copy of `vectors.tar`: 66.0 MB/s.
+- Benchmark part `oamtcd` (474 test units, report-only, 40 m) frozen in `experiments/benchmark.json` from the
+  notebook's `benchmark_part_oamtcd.json`.
+- The notebook's contact sheet draws canopy as each feature's bounding rectangle, which usually falls outside a
+  chip, so it shows no canopy; shading the masked pixels of the `restor/tcd-nc` test tiles locally showed the canopy
+  masked and the trees inside it left unmasked.
