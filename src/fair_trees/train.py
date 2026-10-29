@@ -316,7 +316,7 @@ def _validate(
     """Val metrics through the serving decode path; puts the model back in train mode.
 
     When the units come from several sources, each source is scored on its own and the scores are the
-    equal-weight means over sources (with ``f1_max/<source>`` and ``ap40/<source>`` alongside), so a large
+    equal-weight means over sources (with ``f1_max_<source>`` and ``ap40_<source>`` alongside), so a large
     source cannot drown out a small one in early stopping.
     """
     t0 = time.monotonic()
@@ -330,7 +330,8 @@ def _validate(
     metrics = {k: float(np.mean([getattr(r, k) for r in reports.values()])) for k in keys}
     if len(reports) > 1:
         for s, r in reports.items():
-            metrics |= {f"f1_max/{s}": r.f1_max, f"ap40/{s}": r.ap40}
+            # not "f1_max/<source>": MLflow's file store cannot hold "f1_max" as both a file and a folder
+            metrics |= {f"f1_max_{s}": r.f1_max, f"ap40_{s}": r.ap40}
     return metrics | {"seconds": time.monotonic() - t0}
 
 

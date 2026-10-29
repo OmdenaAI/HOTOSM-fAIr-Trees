@@ -293,7 +293,9 @@ def test_validate_balances_sources(monkeypatch):
     v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
 
     assert v["f1_max"] == pytest.approx(0.5) and v["ap40"] == pytest.approx(0.5)
-    assert v["f1_max/a"] == 0.8 and v["f1_max/b"] == 0.2 and v["ap40/a"] == 0.6
+    assert v["f1_max_a"] == 0.8 and v["f1_max_b"] == 0.2 and v["ap40_a"] == 0.6
+    # MLflow's file store keeps a metric as a file, so no key may also be the folder of another
+    assert not any(k2.startswith(f"{k1}/") for k1 in v for k2 in v)
     assert sorted(calls) == [["a", "a"], ["b", "b"]]
 
 
