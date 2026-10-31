@@ -4,9 +4,10 @@ Each 10 cm tile is written as a GeoTIFF in its own CRS and cut into Web Mercator
 are not contiguous, so a region never spans two. Tree instances become label boxes (their COCO ``bbox``); a
 tree box wider or taller than ``MAX_TREE_SIDE_M`` becomes an ignore area instead. Canopy instances (tree
 groups) become ignore areas with the tree boxes they overlap cut out, so masking never removes a tree
-label. The Hugging Face ``test`` split is kept as ``test``; validation fold 0 is ``val`` and folds 1-4 are
-``train``. Tiles within ``HOT_BUFFER_M`` of HOT's Freetown tiles are dropped so HOT val and test stay clean.
-``restor/tcd-sa`` (CC-BY-SA) is never converted.
+label; with ``canopy_as_groups`` that same geometry is a tree_group label instead. The Hugging Face
+``test`` split is kept as ``test``; validation fold 0 is ``val`` and folds 1-4 are ``train``. Tiles within
+``HOT_BUFFER_M`` of HOT's Freetown tiles are dropped so HOT val and test stay clean. ``restor/tcd-sa``
+(CC-BY-SA) is never converted.
 """
 
 import io
@@ -36,6 +37,7 @@ from experiments.leakage import box_distance_m
 from experiments.tiler import tile_scene
 from fair_trees.dataset import MAX_MASKED
 from fair_trees.georef import tile_bounds_4326, true_gsd
+from fair_trees.params import CLASSES
 from fair_trees.preprocess import read_chip
 
 logger = logging.getLogger(__name__)
@@ -148,11 +150,13 @@ def tile_features(
     ids: Mapping[str, int],
     *,
     gsd_m: float = SOURCE_GSD,
+    canopy_as_groups: bool = False,
 ) -> tuple[list[dict], list[dict], dict]:
     """Label features (tree boxes) and ignore features (large trees, canopy minus trees), in EPSG:4326.
 
-    ``gsd_m`` is the tile's ground metres per pixel, for the ``MAX_TREE_SIDE_M`` limit. The counts include
-    ``ignore_px``, the masked area in pixels (the union of the ignore features).
+    With ``canopy_as_groups`` each canopy minus its trees is a tree_group label (``label: 2``) instead of
+    an ignore feature. ``gsd_m`` is the tile's ground metres per pixel, for the ``MAX_TREE_SIDE_M`` limit.
+    The counts include ``ignore_px``, the masked area in pixels (the union of the ignore features).
     """
     trees, large, canopy_px = [], [], []
     for a in annotations:
@@ -169,16 +173,21 @@ def tile_features(
     labels = [_feature(_to_4326(g, transform, crs), {"label": 1, "source": SOURCE}) for g in trees]
     ignore = [_feature(_to_4326(g, transform, crs), {"reason": "large_tree"}) for g in large]
     masked = list(large)
+    n_canopy = 0
     for geom in canopy_px:
         rest = geom.difference(tree_union) if trees else geom
         if rest.is_empty or rest.area <= 0:
             continue
-        ignore.append(_feature(_to_4326(rest, transform, crs), {"reason": "canopy"}))
-        masked.append(rest)
+        n_canopy += 1
+        if canopy_as_groups:
+            labels.append(_feature(_to_4326(rest, transform, crs), {"label": 2, "source": SOURCE}))
+        else:
+            ignore.append(_feature(_to_4326(rest, transform, crs), {"reason": "canopy"}))
+            masked.append(rest)
     counts = {
         "trees": len(trees),
         "large_trees": len(large),
-        "canopy": len(masked) - len(large),
+        "canopy": n_canopy,
         "ignore_px": float(shapely.union_all(masked).area) if masked else 0.0,
     }
     return labels, ignore, counts
@@ -230,8 +239,12 @@ def convert(
     biome_fn: Callable[[float, float], str] | None = None,
     zooms: Sequence[int] = (19, 20),
     work_dir: Path | None = None,
+    canopy_as_groups: bool = False,
 ) -> dict:
     """Write one region per kept tile and ``stats.json`` into an empty ``out_root``; return the stats.
+
+    With ``canopy_as_groups`` canopy becomes tree_group labels (see ``tile_features``) and every region
+    labels both classes; otherwise canopy is ignored and regions are tree-only.
 
     Each row: ``dataset`` (``"tcd"`` or ``"tcd-nc"``), ``hf_split``, ``image_id``, ``image`` (encoded bytes),
     ``width``, ``height``, ``bounds`` (minx, miny, maxx, maxy in ``crs``), ``crs``, ``validation_fold`` and
@@ -273,7 +286,9 @@ def convert(
         source_gsd = px * math.cos(math.radians(lat))  # a Mercator metre shrinks by cos(lat) on the ground
         split = _split(row)
         anns = json.loads(row["coco_annotations"] or "[]")
-        labels, ignore, counts = tile_features(anns, transform, crs, ids, gsd_m=source_gsd)
+        labels, ignore, counts = tile_features(
+            anns, transform, crs, ids, gsd_m=source_gsd, canopy_as_groups=canopy_as_groups
+        )
         ignore_share = counts["ignore_px"] / (width * height)
         if ignore_share > MAX_MASKED:
             if split == "train":
@@ -326,6 +341,8 @@ def convert(
             "valid_area_m2": valid_area,
             "ignore_share": ignore_share,
         }
+        if canopy_as_groups:
+            meta["classes"] = list(CLASSES)
         _write_json(region_dir / "region.json", meta)
         regions[split][licence] = regions[split].get(licence, 0) + 1
         area_m2[split] += valid_area
@@ -340,6 +357,7 @@ def convert(
         "tree_boxes": totals["tree_boxes"],
         "large_trees": totals["large_trees"],
         "canopy_masks": totals["canopy_masks"],
+        "canopy_as": "groups" if canopy_as_groups else "ignore",
         "dropped_near_hot": totals["dropped_near_hot"],
         "dropped_mostly_masked": totals["dropped_mostly_masked"],
         "regions_over_max_masked": over_max_masked,
