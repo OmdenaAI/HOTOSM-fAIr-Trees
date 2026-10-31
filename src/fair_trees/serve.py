@@ -141,6 +141,18 @@ def predict_mosaic(run_fn: RunFn, mosaic: Mosaic, params: InferenceParams) -> De
     return predict_mosaic_classes(run_fn, mosaic, params, (0,))[0]
 
 
+def predict_group_parts(
+    run_fn: RunFn, mosaic: Mosaic, params: InferenceParams
+) -> list[tuple[Detections, np.ndarray]]:
+    """Each `group_window_m` window's tree_group boxes (mosaic pixels) and whether each is cut, before the
+    cross-window join: what `merge_group_detections` takes, so a caller can filter scores first."""
+    parts = []
+    for run in _run_windows(run_fn, mosaic, params, params.group_window_m):
+        d = _decode(run, params, 1)
+        parts.append((d, cut_boxes(d, run.window, run.interior, params.edge_band)))
+    return parts
+
+
 def _window_count(mosaics: list[Mosaic], params: InferenceParams) -> int:
     """Windows the tree and group grids would run, counted as if both run (the model's classes are not
     known before the first window)."""

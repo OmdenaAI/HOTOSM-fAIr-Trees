@@ -21,10 +21,10 @@ from fair_trees.dataset import (
     rasterize_mask,
     window_boxes,
 )
-from fair_trees.decode import Detections, filter_score
+from fair_trees.decode import Detections, filter_group_parts, filter_score, merge_group_detections
 from fair_trees.params import CLASSES, InferenceParams
 from fair_trees.preprocess import Mosaic, mosaic_chips
-from fair_trees.serve import RunFn, predict_mosaic_classes
+from fair_trees.serve import RunFn, predict_group_parts, predict_mosaic_classes
 
 
 def iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -178,15 +178,6 @@ def _drop_ignored(dets: Detections, mask: np.ndarray) -> Detections:
     return Detections(dets.boxes[keep], dets.scores[keep])
 
 
-def _pooled(
-    decoded: Sequence[Detections], units: Sequence[EvalUnit], t: float, iou_threshold: float
-) -> list[Counts]:
-    return [
-        count_matches(filter_score(d, t).boxes, u.gt_boxes, iou_threshold)
-        for d, u in zip(decoded, units, strict=True)
-    ]
-
-
 def _sum(counts: Sequence[Counts]) -> Counts:
     total = Counts(0, 0, 0)
     for c in counts:
@@ -206,19 +197,38 @@ def evaluate_units(
     class_index: int = 0,
 ) -> EvalReport:
     """Decode each unit's class ``class_index`` once at a low threshold, then score at the operating point
-    and a sweep."""
+    and a sweep.
+
+    Trees are filtered after the cross-window merge (greedy NMS keeps the same boxes either way). Groups are
+    filtered per window before their cross-window join, as serving filters them, since a low-score cut box
+    would otherwise widen a confident one.
+    """
     low_params = dataclasses.replace(
         params, confidence_threshold=min(decode_threshold, params.confidence_threshold)
     )
-    decoded = []
-    for u in units:
-        dets = predict_mosaic_classes(run_fn, u.mosaic, low_params, (class_index,))[0]
-        if ignore and u.ignore_mask is not None:
-            dets = _drop_ignored(dets, np.asarray(u.ignore_mask, dtype=bool))
-        decoded.append(dets)
+    masks = [
+        np.asarray(u.ignore_mask, dtype=bool) if ignore and u.ignore_mask is not None else None for u in units
+    ]
+    if class_index == 1:
+        parts = [predict_group_parts(run_fn, u.mosaic, low_params) for u in units]
+
+        def at(i: int, t: float) -> Detections:
+            dets = merge_group_detections(filter_group_parts(parts[i], t), params.iou_threshold)
+            return dets if masks[i] is None else _drop_ignored(dets, masks[i])
+    else:
+        decoded = []
+        for u, mask in zip(units, masks, strict=True):
+            dets = predict_mosaic_classes(run_fn, u.mosaic, low_params, (class_index,))[0]
+            decoded.append(dets if mask is None else _drop_ignored(dets, mask))
+
+        def at(i: int, t: float) -> Detections:
+            return filter_score(decoded[i], t)
+
+    def _pooled(t: float) -> list[Counts]:
+        return [count_matches(at(i, t).boxes, u.gt_boxes, iou_threshold) for i, u in enumerate(units)]
 
     t0 = params.confidence_threshold
-    per_unit = _pooled(decoded, units, t0, iou_threshold)
+    per_unit = _pooled(t0)
     p, r, f1 = prf(_sum(per_unit))
     unit_rows = [
         {"unit_id": u.unit_id, "meta": dict(u.meta), "tp": c.tp, "fp": c.fp, "fn": c.fn}
@@ -238,7 +248,7 @@ def evaluate_units(
 
     sweep = []
     for t in thresholds:
-        sp, sr, sf = prf(_sum(_pooled(decoded, units, float(t), iou_threshold)))
+        sp, sr, sf = prf(_sum(_pooled(float(t))))
         sweep.append({"threshold": float(t), "precision": sp, "recall": sr, "f1": sf})
     if sweep:
         f1_max = max(s["f1"] for s in sweep)
@@ -246,7 +256,7 @@ def evaluate_units(
     else:
         f1_max, conf_at_max = 0.0, 0.0
 
-    curve = [prf(_sum(_pooled(decoded, units, float(t), iou_threshold))) for t in AP_THRESHOLDS]
+    curve = [prf(_sum(_pooled(float(t)))) for t in AP_THRESHOLDS]
     ap40 = average_precision([c[1] for c in curve], [c[0] for c in curve]) if units else 0.0
 
     return EvalReport(

@@ -221,9 +221,9 @@ def merge_group_detections(
     joins every box of another window it overlaps, transitively; a joined set becomes its union extent with
     the highest score.
     """
-    if not parts:
-        return Detections.empty()
     dets = concat_detections([d for d, _ in parts])
+    if not len(dets.scores):
+        return Detections.empty()
     cut = np.concatenate([np.asarray(c, bool) for _, c in parts])
     window = np.repeat(np.arange(len(parts)), [len(d.scores) for d, _ in parts])
     b = dets.boxes.astype(np.float64)
@@ -241,13 +241,22 @@ def merge_group_detections(
         for j in np.flatnonzero((iw > 0) & (ih > 0) & (window != window[i])):
             parent[find(j)] = find(i)
     roots = np.array([find(i) for i in range(len(b))], np.int64)
-    boxes, scores = [], []
-    for r in np.unique(roots):
-        members = roots == r
-        boxes.append([*b[members, :2].min(axis=0), *b[members, 2:].max(axis=0)])
-        scores.append(dets.scores[members].max())
-    joined = Detections(np.asarray(boxes, np.float32).reshape(-1, 4), np.asarray(scores, np.float32))
+    _, member_of = np.unique(roots, return_inverse=True)
+    n = int(member_of.max()) + 1
+    lo, hi = np.full((n, 2), np.inf), np.full((n, 2), -np.inf)
+    np.minimum.at(lo, member_of, b[:, :2])
+    np.maximum.at(hi, member_of, b[:, 2:])
+    scores = np.full(n, -np.inf, np.float32)
+    np.maximum.at(scores, member_of, dets.scores)
+    joined = Detections(np.hstack([lo, hi]).astype(np.float32), scores)
     return merge_window_detections(joined, iou_threshold)
+
+
+def filter_group_parts(
+    parts: Sequence[tuple[Detections, np.ndarray]], threshold: float
+) -> list[tuple[Detections, np.ndarray]]:
+    """Each window's group boxes scoring strictly above the threshold, with their cut flags."""
+    return [(filter_score(d, threshold), np.asarray(c, bool)[d.scores > threshold]) for d, c in parts]
 
 
 def merge_window_detections(dets: Detections, iou_threshold: float) -> Detections:
