@@ -158,6 +158,8 @@ def write_region(tmp_path, write_oam_chip):
         fill=None,
         alpha=None,
         area=None,
+        groups_px=(),
+        classes=None,
     ):
         root = Path(root or tmp_path / "regions")
         d = root / region_id
@@ -175,6 +177,7 @@ def write_region(tmp_path, write_oam_chip):
                 count=3 if alpha is None else 4,
             )
         labels = feature_collection([box_polygon(b) for b in boxes_px], label=1)
+        labels["features"] += feature_collection([box_polygon(b) for b in groups_px], label=2)["features"]
         (d / "labels.geojson").write_text(json.dumps(labels))
         if ignore_px:
             (d / "ignore.geojson").write_text(
@@ -191,6 +194,8 @@ def write_region(tmp_path, write_oam_chip):
             "footprint": None if footprint_px is None else box_polygon(footprint_px),
             "valid_area_m2": float(area if area is not None else len(tiles) * tile_m**2),
         }
+        if classes is not None:
+            meta["classes"] = list(classes)
         (d / "region.json").write_text(json.dumps(meta))
         return d
 

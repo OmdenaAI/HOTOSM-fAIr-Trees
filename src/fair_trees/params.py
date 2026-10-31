@@ -19,6 +19,8 @@ IMAGE_STD = (0.229, 0.224, 0.225)
 MAX_WINDOW_M = 200.0
 MAX_MOSAIC_PIXELS = 2**28  # 16384 x 16384 px, ~1 GiB of RGB + valid mask across one call's mosaics
 
+CLASSES = ("tree", "tree_group")  # head order; GeoJSON label and output class number = index + 1
+
 INPUT_NAME = "images"
 OUTPUT_NAMES = ("cls_logits", "bbox_regression")
 

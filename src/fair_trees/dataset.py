@@ -21,7 +21,7 @@ from pyproj import Transformer
 
 from fair_trees.augment import DOWNSCALE_P, colour_jitter, downscale, flip, rot90
 from fair_trees.georef import ORIGIN_SHIFT, mercator_y_to_lat, parse_oam_name, tile_bounds_3857, true_gsd
-from fair_trees.params import TrainParams
+from fair_trees.params import CLASSES, TrainParams
 from fair_trees.preprocess import Window, read_chip, tile_groups
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,8 @@ _REQUIRED_KEYS = ("id", "source", "biome", "licence", "split", "footprint", "val
 class Region:
     """One labelled area: its chips per zoom, label and ignore files, and the footprint that was mapped.
 
-    ``footprint`` is an EPSG:4326 GeoJSON geometry (``None`` = everything is mapped).
+    ``footprint`` is an EPSG:4326 GeoJSON geometry (``None`` = everything is mapped); ``classes`` names the
+    classes its labels cover (a class not named is unlabelled there, not absent).
     """
 
     id: str
@@ -51,20 +52,22 @@ class Region:
     ignore_path: Path | None
     footprint: dict | None
     valid_area_m2: float
+    classes: tuple[str, ...] = ("tree",)
 
 
 def load_geojson(path: Path) -> dict:
     return json.loads(Path(path).read_text())
 
 
-def _is_tree_label(properties: dict) -> bool:
-    """A missing label is a tree; a present one must be the number 1."""
+def _label_of(properties: dict) -> int | None:
+    """A missing label is a tree (1); a present one must be the number 1 or 2 (tree_group), else None."""
     if "label" not in properties:
-        return True
+        return 1
     try:
-        return float(properties["label"]) == 1.0
+        value = float(properties["label"])
     except (TypeError, ValueError):
-        return False
+        return None
+    return int(value) if value in (1.0, 2.0) else None
 
 
 def _invalid_reason(ring: np.ndarray) -> str | None:
@@ -91,15 +94,16 @@ def _exterior_ring(part: list) -> tuple[np.ndarray, str | None]:
     return ring, _invalid_reason(ring)
 
 
-def label_rings(geojson: dict) -> list[np.ndarray]:
-    """Exterior rings of the tree labels as (k, 2) float64 lon/lat arrays, one per polygon part.
+def label_rings(geojson: dict, label: int = 1) -> list[np.ndarray]:
+    """Exterior rings of the labels of class ``label`` (1 tree, 2 tree_group) as (k, 2) float64 lon/lat
+    arrays, one per polygon part.
 
-    Features whose ``label`` is present and not 1 are dropped silently; empty, unsupported and invalid
-    geometries are skipped with a warning.
+    Features of another class are dropped silently; empty, unsupported and invalid geometries are skipped
+    with a warning.
     """
     rings = []
     for i, feature in enumerate(geojson.get("features", [])):
-        if not _is_tree_label(feature.get("properties") or {}):
+        if _label_of(feature.get("properties") or {}) != label:
             continue
         geometry = feature.get("geometry")
         if not geometry or not geometry.get("coordinates"):
@@ -122,11 +126,11 @@ def label_rings(geojson: dict) -> list[np.ndarray]:
     return rings
 
 
-def labels_to_boxes(geojson: dict, transform_3857: Affine) -> np.ndarray:
-    """Tight XYXY box per label ring in the pixel frame of ``transform_3857``, float32 (N, 4)."""
+def labels_to_boxes(geojson: dict, transform_3857: Affine, label: int = 1) -> np.ndarray:
+    """Tight XYXY box per ring of class ``label`` in the pixel frame of ``transform_3857``, float32 (N, 4)."""
     inverse = ~transform_3857
     boxes = []
-    for ring in label_rings(geojson):
+    for ring in label_rings(geojson, label):
         x, y = _TO_3857.transform(ring[:, 0], ring[:, 1])
         cols, rows = inverse @ (np.asarray(x), np.asarray(y))
         boxes.append([cols.min(), rows.min(), cols.max(), rows.max()])
@@ -218,6 +222,10 @@ def load_regions(root: Path) -> list[Region]:
             if found:
                 chips[int(zdir.name[1:])] = found
         ignore = d / "ignore.geojson"
+        classes = tuple(meta.get("classes", ("tree",)))
+        unknown = sorted(set(classes) - set(CLASSES))
+        if unknown:
+            raise ValueError(f"{d}: unknown classes {unknown} in region.json, expected a subset of {CLASSES}")
         regions.append(
             Region(
                 id=meta["id"],
@@ -230,13 +238,19 @@ def load_regions(root: Path) -> list[Region]:
                 ignore_path=ignore if ignore.is_file() else None,
                 footprint=meta["footprint"],
                 valid_area_m2=float(meta["valid_area_m2"]),
+                classes=classes,
             )
         )
     return sorted(regions, key=lambda r: r.id)
 
 
 def load_fair_dataset(chips: Sequence[Path], labels_path: Path, *, split: str = "train") -> list[Region]:
-    """Regions for a mapper's own chips: one per zoom and 8-connected tile component."""
+    """Regions for a mapper's own chips: one per zoom and 8-connected tile component.
+
+    The regions label tree_group too when the labels file holds any tree_group (``label: 2``) feature.
+    """
+    has_groups = bool(label_rings(load_geojson(labels_path), 2))
+    classes = CLASSES if has_groups else ("tree",)
     named, xyzs = [], []
     for path in map(Path, chips):
         xyz = parse_oam_name(path)
@@ -266,6 +280,7 @@ def load_fair_dataset(chips: Sequence[Path], labels_path: Path, *, split: str = 
                 ignore_path=None,
                 footprint=None,
                 valid_area_m2=len(paths) * (tile_px * gsd) ** 2,
+                classes=classes,
             )
         )
     return regions
