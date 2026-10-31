@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 import pytest
 
@@ -7,7 +9,7 @@ pytest.importorskip("torchvision")
 from torchvision.ops.misc import FrozenBatchNorm2d  # noqa: E402
 
 from fair_trees.decode import make_anchors  # noqa: E402
-from fair_trees.train import build_model, torch_run_fn  # noqa: E402
+from fair_trees.train import build_model, checkpoint_num_classes, torch_run_fn  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -74,3 +76,48 @@ def test_torch_run_fn_shapes_match_numpy_anchors(model3):
     a = sum(len(x) for x in make_anchors(256, 320))
     assert cls.shape == (1, a, 1) and reg.shape == (1, a, 4)
     assert cls.dtype == np.float32 and not model3.training
+
+
+def _cls_weight(state):
+    return state["head.classification_head.cls_logits.weight"]
+
+
+def test_build_reads_k_from_checkpoint(tmp_path):
+    path = tmp_path / "k2.pt"
+    torch.save(build_model(None, trainable_layers=0, num_classes=2).state_dict(), path)
+    model = build_model(path, trainable_layers=0)
+    assert model.head.classification_head.num_classes == 2
+    assert checkpoint_num_classes(torch.load(path, weights_only=True)) == 2
+    assert build_model(None, trainable_layers=0).head.classification_head.num_classes == 1
+
+
+def test_expand_k1_to_k2_keeps_tree_rows(model3, tmp_path):
+    path = tmp_path / "k1.pt"
+    torch.save(model3.state_dict(), path)
+    a = build_model(path, trainable_layers=0, num_classes=2)
+    b = build_model(path, trainable_layers=0, num_classes=2)
+    old, new = model3.state_dict(), a.state_dict()
+    bias_key = "head.classification_head.cls_logits.bias"
+    assert torch.equal(_cls_weight(new)[0::2], _cls_weight(old))
+    assert torch.equal(new[bias_key][0::2], old[bias_key])
+    assert torch.allclose(new[bias_key][1::2], torch.full((9,), -math.log(99)))
+    assert torch.equal(_cls_weight(new)[1::2], _cls_weight(b.state_dict())[1::2])
+    assert 0.005 < float(_cls_weight(new)[1::2].std()) < 0.015
+    batch = np.random.default_rng(0).normal(size=(1, 3, 128, 160)).astype(np.float32)
+    cls1, _ = torch_run_fn(model3, torch.device("cpu"))(batch)
+    cls2, _ = torch_run_fn(a, torch.device("cpu"))(batch)
+    np.testing.assert_allclose(cls2[..., 0], cls1[..., 0], atol=1e-5)
+
+
+def test_expansion_keeps_state_metadata(model3):
+    from fair_trees.train import _add_group_rows
+
+    state = model3.state_dict()
+    assert _add_group_rows(state)._metadata is state._metadata
+
+
+def test_k2_into_k1_refused(tmp_path):
+    path = tmp_path / "k2.pt"
+    torch.save(build_model(None, trainable_layers=0, num_classes=2).state_dict(), path)
+    with pytest.raises(ValueError, match="2 classes.*1"):
+        build_model(path, trainable_layers=0, num_classes=1)

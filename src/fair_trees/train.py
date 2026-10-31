@@ -46,21 +46,62 @@ logger = logging.getLogger(__name__)
 CKPT_PATTERN = re.compile(r"^ckpt-e(\d{3})-s(\d{6})\.pt$")
 
 
-def build_model(weights: Path | None, *, trainable_layers: int) -> RetinaNet:
-    """Single-class RetinaNet (ResNet-50 FPN, frozen BN); loads `weights` strictly when given."""
+CLS_WEIGHT = "head.classification_head.cls_logits.weight"
+CLS_BIAS = "head.classification_head.cls_logits.bias"
+NUM_ANCHORS = 9  # 3 sizes x 3 aspect ratios per location
+
+
+def checkpoint_num_classes(state: Mapping[str, torch.Tensor]) -> int:
+    """Classes of a RetinaNet state dict: classification-head output rows per anchor."""
+    return state[CLS_WEIGHT].shape[0] // NUM_ANCHORS
+
+
+def _add_group_rows(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Grow a tree-only state to tree + tree_group in place: row ``a*2`` keeps tree row ``a``; the group
+    rows start as torchvision initialises a head (N(0, 0.01) weights, prior-0.01 bias) from a fixed seed.
+
+    In place, so the state keeps its ``_metadata`` (module versions torchvision needs to rename the old
+    FPN keys of the release weights).
+    """
+    weight, bias = state[CLS_WEIGHT], state[CLS_BIAS]
+    generator = torch.Generator().manual_seed(0)
+    new_weight = torch.empty((2 * NUM_ANCHORS, *weight.shape[1:]), dtype=weight.dtype)
+    new_weight[0::2] = weight
+    new_weight[1::2] = torch.normal(0.0, 0.01, size=weight.shape, generator=generator).to(weight.dtype)
+    new_bias = torch.empty(2 * NUM_ANCHORS, dtype=bias.dtype)
+    new_bias[0::2] = bias
+    new_bias[1::2] = -math.log(99)
+    state[CLS_WEIGHT], state[CLS_BIAS] = new_weight, new_bias
+    return state
+
+
+def build_model(weights: Path | None, *, trainable_layers: int, num_classes: int | None = None) -> RetinaNet:
+    """RetinaNet (ResNet-50 FPN, frozen BN) with 1 or 2 classes; loads `weights` strictly when given.
+
+    `num_classes` None takes the checkpoint's (1 without weights). A tree-only checkpoint loads into a
+    two-class model with its tree rows kept and fresh tree_group rows; the reverse is refused.
+    """
     if not 0 <= trainable_layers <= 5:
         raise ValueError(f"trainable_layers must be in 0..5, got {trainable_layers}")
-    body = resnet50(weights=None, norm_layer=FrozenBatchNorm2d)
-    backbone = _resnet_fpn_extractor(
-        body, trainable_layers, returned_layers=[2, 3, 4], extra_blocks=LastLevelP6P7(256, 256)
-    )
-    model = RetinaNet(backbone, num_classes=1)
+    state = None
     if weights is not None:
         state = torch.load(weights, map_location="cpu", weights_only=True)
         # FrozenBatchNorm2d silently drops `num_batches_tracked`, so strict=True alone would
         # accept a trainable-BN checkpoint; reject that layout explicitly.
         if any(k.endswith("num_batches_tracked") for k in state):
             raise RuntimeError(f"{weights}: trainable batch-norm layout, expected frozen-BN state_dict")
+        found = checkpoint_num_classes(state)
+        num_classes = num_classes or found
+        if found > num_classes:
+            raise ValueError(f"{weights} has {found} classes; it cannot load into a model of {num_classes}")
+        if found < num_classes:
+            state = _add_group_rows(state)
+    body = resnet50(weights=None, norm_layer=FrozenBatchNorm2d)
+    backbone = _resnet_fpn_extractor(
+        body, trainable_layers, returned_layers=[2, 3, 4], extra_blocks=LastLevelP6P7(256, 256)
+    )
+    model = RetinaNet(backbone, num_classes=num_classes or 1)
+    if state is not None:
         model.load_state_dict(state, strict=True)
     return model
 

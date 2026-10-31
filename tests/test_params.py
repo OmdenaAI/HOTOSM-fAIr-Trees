@@ -130,6 +130,15 @@ def test_train_ranges(hp):
         parse_train_params(hp)
 
 
+def test_num_classes_parsed():
+    assert TrainParams().num_classes is None
+    assert parse_train_params({"num_classes": 1}).num_classes == 1
+    assert parse_train_params({"num_classes": 2}).num_classes == 2
+    for bad in (0, 3, "two"):
+        with pytest.raises(ValueError, match="num_classes"):
+            parse_train_params({"num_classes": bad})
+
+
 def test_zoom_weight_keys_from_json():
     p = parse_train_params({"zoom_weights": {"20": 1, "19": 0}})
     assert p.zoom_weights == {20: 1.0, 19: 0.0}
