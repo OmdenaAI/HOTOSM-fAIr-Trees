@@ -1,6 +1,7 @@
-# hot_platform.yaml with crops up to 120 m: the tree-only control for hot_groups.yaml, which needs those
-# crops for its groups. Run it only if hot_groups.yaml moves tree F1, to tell the crops from the class.
-weights: weights/NEON.pt          # relative to the Drive root
+# hot_platform_joint0.3.yaml with crops up to 120 m: the tree-only control for hot_groups.yaml, which needs
+# those crops for its groups. Run it only if hot_groups.yaml moves tree F1 away from hot_platform_joint0.3's,
+# to tell the crops from the class.
+weights: runs/joint-base-wise-0.3/weights.pt  # relative to the Drive root
 sources: [hot]
 hyperparameters:
   trainable_layers: 0
