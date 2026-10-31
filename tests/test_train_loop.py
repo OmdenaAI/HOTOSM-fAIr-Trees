@@ -208,6 +208,29 @@ def test_fine_tune_on_fair_chips(monkeypatch, write_oam_chip, geo, weights, tmp_
     assert res.history[0]["sampler/draws/zoom/22"] == 3.0
 
 
+def test_fine_tune_keeps_k1_unless_asked(monkeypatch, write_oam_chip, geo, weights, tmp_path):
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(3)]
+    labels = tmp_path / "labels.geojson"
+    fc = geo.feature_collection([geo.box_polygon((5, 5, 15, 15))])
+    fc["features"] += geo.feature_collection([geo.box_polygon((40, 40, 90, 90))], label=2)["features"]
+    labels.write_text(json.dumps(fc))
+    monkeypatch.setattr(T, "_validate", Script([0.2]).validate)
+    hp = {"epochs": 1, "batch_size": 2, "samples_per_epoch": 2, "amp": False}
+    for name, extra, k in (("k1", {}, 1), ("k2", {"num_classes": 2}, 2)):
+        res = T.fine_tune(
+            chips[:2],
+            chips[2:],
+            labels,
+            hp | extra,
+            weights=weights,
+            out_dir=tmp_path / name,
+            num_workers=0,
+            tmp_dir=tmp_path / "tmp",
+        )
+        state = torch.load(res.best_checkpoint, weights_only=True)
+        assert T.checkpoint_num_classes(state) == k
+
+
 def test_fine_tune_refuses_to_resume_on_changed_data(monkeypatch, write_oam_chip, geo, weights, tmp_path):
     chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(4)]
     labels = tmp_path / "labels.geojson"

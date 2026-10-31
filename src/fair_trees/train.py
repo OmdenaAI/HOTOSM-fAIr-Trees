@@ -17,12 +17,15 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
+from PIL import Image
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.models import resnet50
 from torchvision.models.detection import RetinaNet
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
 from torchvision.models.detection.image_list import ImageList
+from torchvision.ops import boxes as box_ops
+from torchvision.ops import sigmoid_focal_loss
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7
 from torchvision.ops.misc import FrozenBatchNorm2d
 
@@ -148,30 +151,59 @@ class Batch(NamedTuple):
     targets: list[dict[str, torch.Tensor]]
 
 
-def collate(items: Sequence[tuple[int, np.ndarray, tuple[int, int], np.ndarray]]) -> Batch:
-    """Stack `(index, image (3, Hp, Wp), resized (h, w), boxes (K, 4))` items into one padded batch."""
+Item = tuple[int, np.ndarray, tuple[int, int], np.ndarray, np.ndarray, np.ndarray]
+
+
+def collate(items: Sequence[Item]) -> Batch:
+    """Stack `(index, image (3, Hp, Wp), resized (h, w), boxes (K, 4), labels (K,), unsupervised (C, h, w))`
+    items into one padded batch; the unsupervised rasters are padded with False."""
     height = max(item[1].shape[1] for item in items)
     width = max(item[1].shape[2] for item in items)
     images = torch.zeros((len(items), 3, height, width), dtype=torch.float32)
-    for row, (_, image, _, _) in enumerate(items):
-        images[row, :, : image.shape[1], : image.shape[2]] = torch.from_numpy(np.ascontiguousarray(image))
     targets = []
-    for _, _, _, boxes in items:
-        boxes_t = torch.from_numpy(np.ascontiguousarray(boxes, dtype=np.float32)).reshape(-1, 4)
-        targets.append({"boxes": boxes_t, "labels": torch.zeros(len(boxes_t), dtype=torch.int64)})
+    for row, (_, image, _, boxes, labels, unsupervised) in enumerate(items):
+        images[row, :, : image.shape[1], : image.shape[2]] = torch.from_numpy(np.ascontiguousarray(image))
+        padded = torch.zeros((len(unsupervised), height, width), dtype=torch.bool)
+        padded[:, : unsupervised.shape[1], : unsupervised.shape[2]] = torch.from_numpy(unsupervised)
+        targets.append(
+            {
+                "boxes": torch.from_numpy(np.ascontiguousarray(boxes, dtype=np.float32)).reshape(-1, 4),
+                "labels": torch.from_numpy(np.ascontiguousarray(labels, dtype=np.int64)),
+                "unsupervised": padded,
+            }
+        )
     return Batch([item[0] for item in items], images, [tuple(item[2]) for item in items], targets)
 
 
+def _resize_masks(masks: np.ndarray, height: int, width: int) -> np.ndarray:
+    """Nearest-neighbour resize of (C, h, w) bool masks to (C, height, width)."""
+    out = [
+        np.asarray(Image.fromarray(m.astype(np.uint8)).resize((width, height), Image.Resampling.NEAREST))
+        for m in masks
+    ]
+    return np.stack(out).astype(bool).reshape(len(masks), height, width)
+
+
 class SampleDataset(Dataset):
-    """Planned samples from `start` on, preprocessed exactly as serving does; boxes in resized pixels."""
+    """Planned samples from `start` on, preprocessed exactly as serving does; boxes in resized pixels.
+
+    Only the model's first `num_classes` classes are kept: their boxes and unsupervised rasters.
+    """
 
     def __init__(
-        self, specs: Sequence[SampleSpec], regions: Sequence[Region], cfg: TrainParams, *, start: int = 0
+        self,
+        specs: Sequence[SampleSpec],
+        regions: Sequence[Region],
+        cfg: TrainParams,
+        *,
+        start: int = 0,
+        num_classes: int = 1,
     ):
         self.specs = specs
         self.regions = regions
         self.cfg = cfg
         self.start = start
+        self.num_classes = num_classes
         self._cache: RegionCache | None = None
 
     def __getstate__(self) -> dict:
@@ -181,20 +213,25 @@ class SampleDataset(Dataset):
     def __len__(self) -> int:
         return len(self.specs) - self.start
 
-    def __getitem__(self, i: int) -> tuple[int, np.ndarray, tuple[int, int], np.ndarray]:
+    def __getitem__(self, i: int) -> Item:
         if self._cache is None:
             self._cache = RegionCache(self.regions)
         sample = load_sample(self.specs[self.start + i], self._cache, self.cfg)
-        rgb, boxes = sample.rgb, sample.boxes[sample.labels == 0]
-        batch, scale = preprocess_window(rgb)
-        boxes = boxes * np.array([scale.scale_x, scale.scale_y, scale.scale_x, scale.scale_y], np.float32)
+        batch, scale = preprocess_window(sample.rgb)
+        ours = sample.labels < self.num_classes
+        boxes = sample.boxes[ours] * np.array(
+            [scale.scale_x, scale.scale_y, scale.scale_x, scale.scale_y], np.float32
+        )
         # a degenerate box makes the box coder's log(w) infinite
         keep = ((boxes[:, 2] - boxes[:, 0]) >= 1.0) & ((boxes[:, 3] - boxes[:, 1]) >= 1.0)
+        size = (scale.resized_height, scale.resized_width)
         return (
             self.start + i,
             batch[0],
-            (scale.resized_height, scale.resized_width),
+            size,
             np.ascontiguousarray(boxes[keep], dtype=np.float32),
+            sample.labels[ours][keep],
+            _resize_masks(sample.unsupervised[: self.num_classes], *size),
         )
 
 
@@ -205,10 +242,11 @@ def make_loader(
     *,
     start: int = 0,
     num_workers: int = 2,
+    num_classes: int = 1,
 ) -> DataLoader:
     """Sequential loader over `specs[start:]`; DataLoader keeps worker order, so a resume is exact."""
     return DataLoader(
-        SampleDataset(specs, regions, cfg, start=start),
+        SampleDataset(specs, regions, cfg, start=start, num_classes=num_classes),
         batch_size=cfg.batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -223,11 +261,62 @@ def forward_loss(
     image_sizes: list[tuple[int, int]],
     targets: list[dict],
 ) -> dict[str, torch.Tensor]:
-    """Training losses on preprocessed batches; GeneralizedRCNNTransform never runs."""
+    """Training losses on preprocessed batches; GeneralizedRCNNTransform never runs.
+
+    torchvision's own loss runs unless some target has unsupervised pixels.
+    """
     features = list(model.backbone(images).values())
     head_outputs = model.head(features)
     anchors = model.anchor_generator(ImageList(images, image_sizes), features)
+    if any(t.get("unsupervised") is not None and t["unsupervised"].any() for t in targets):
+        return masked_compute_loss(model, targets, head_outputs, anchors)
     return model.compute_loss(targets, head_outputs, anchors)
+
+
+def masked_compute_loss(
+    model: RetinaNet, targets: list[dict], head_outputs: dict[str, torch.Tensor], anchors: list[torch.Tensor]
+) -> dict[str, torch.Tensor]:
+    """torchvision's RetinaNet loss, except that the negative classification terms of an anchor whose centre
+    lies on an unsupervised pixel of a class (``targets[i]["unsupervised"]``, (C, H, W) bool) are dropped.
+
+    Matching, the focal loss, its normalisation by the foreground count and the box regression are
+    torchvision's.
+    """
+    head = model.head.classification_head
+    matched_idxs = []
+    for anchors_per_image, t in zip(anchors, targets, strict=True):
+        if t["boxes"].numel() == 0:
+            matched_idxs.append(
+                torch.full((len(anchors_per_image),), -1, dtype=torch.int64, device=anchors_per_image.device)
+            )
+        else:
+            matched_idxs.append(model.proposal_matcher(box_ops.box_iou(t["boxes"], anchors_per_image)))
+
+    losses = []
+    for t, logits, anchors_per_image, matched in zip(
+        targets, head_outputs["cls_logits"], anchors, matched_idxs, strict=True
+    ):
+        foreground = matched >= 0
+        target = torch.zeros_like(logits)
+        target[foreground, t["labels"][matched[foreground]]] = 1.0
+        weight = torch.ones_like(logits)
+        unsupervised = t.get("unsupervised")
+        if unsupervised is not None:
+            _, h, w = unsupervised.shape
+            centres = (anchors_per_image[:, :2] + anchors_per_image[:, 2:]) / 2
+            cx = centres[:, 0].floor().long().clamp(0, w - 1)
+            cy = centres[:, 1].floor().long().clamp(0, h - 1)
+            off = unsupervised[:, cy, cx].T  # (anchors, C)
+            weight = torch.where(off & (target == 0), 0.0, 1.0).to(logits.dtype)
+        valid = matched != head.BETWEEN_THRESHOLDS
+        terms = sigmoid_focal_loss(logits[valid], target[valid], reduction="none") * weight[valid]
+        losses.append(terms.sum() / max(1, int(foreground.sum())))
+    return {
+        "classification": torch.stack(losses).sum() / len(targets),
+        "bbox_regression": model.head.regression_head.compute_loss(
+            targets, head_outputs, anchors, matched_idxs
+        ),
+    }
 
 
 def checkpoint_name(epoch: int, step: int) -> str:
@@ -448,7 +537,9 @@ def train(
         val_params = InferenceParams()
     out_dir = Path(out_dir)
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    model = build_model(weights, trainable_layers=cfg.trainable_layers).to(device).train()
+    model = build_model(weights, trainable_layers=cfg.trainable_layers, num_classes=cfg.num_classes)
+    model = model.to(device).train()
+    num_classes = model.head.classification_head.num_classes
     ref = snapshot(model)
     w0 = state_hash(ref)
     chash = config_hash(cfg)
@@ -527,7 +618,12 @@ def train(
         t_epoch = time.monotonic()
         trained = 0  # samples trained in this session; a resumed epoch counts only its remainder
         loader = make_loader(
-            specs, train_regions, cfg, start=s.step * cfg.batch_size, num_workers=num_workers
+            specs,
+            train_regions,
+            cfg,
+            start=s.step * cfg.batch_size,
+            num_workers=num_workers,
+            num_classes=num_classes,
         )
         for batch in loader:
             images = batch.images.to(device)
