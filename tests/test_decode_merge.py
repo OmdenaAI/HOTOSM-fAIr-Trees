@@ -3,11 +3,13 @@ import numpy as np
 from fair_trees.decode import (
     Detections,
     concat_detections,
+    cut_boxes,
     decode_retinanet_output,
     drop_edge_boxes,
     filter_score,
     interior_sides,
     make_anchors,
+    merge_group_detections,
     merge_window_detections,
     window_to_mosaic,
 )
@@ -51,6 +53,34 @@ def test_drop_edge_boxes():
     np.testing.assert_allclose(
         drop_edge_boxes(d, win, {"left", "right", "top"}, 0.0).scores, [0.9, 0.8, 0.7, 0.6]
     )
+
+
+def test_cut_boxes_are_the_ones_drop_edge_boxes_drops():
+    win = Window(100, 100, 200, 200)
+    d = _dets([[105, 150, 140, 180], [150, 150, 180, 180], [260, 150, 295, 180]], [0.9, 0.8, 0.7])
+    assert cut_boxes(d, win, {"left", "right"}, 0.05).tolist() == [True, False, True]
+
+
+def test_group_split_across_windows_is_joined():
+    a = (_dets([[80, 10, 100, 30]], [0.5]), np.array([True]))
+    b = (_dets([[95, 12, 130, 32]], [0.7]), np.array([True]))
+    m = merge_group_detections([a, b], 0.15)
+    np.testing.assert_allclose(m.boxes, [[80, 10, 130, 32]])
+    np.testing.assert_allclose(m.scores, [0.7])
+
+
+def test_cut_group_joins_full_box_of_other_window():
+    a = (_dets([[80, 10, 100, 30]], [0.5]), np.array([True]))
+    b = (_dets([[60, 10, 130, 30], [300, 300, 340, 340]], [0.9, 0.4]), np.array([False, False]))
+    m = merge_group_detections([a, b], 0.15)
+    assert _as_set(m) == {(60.0, 10.0, 130.0, 30.0, 0.9), (300.0, 300.0, 340.0, 340.0, 0.4)}
+
+
+def test_separate_groups_stay_separate():
+    a = (_dets([[0, 0, 10, 10], [12, 0, 20, 10]], [0.9, 0.8]), np.array([True, False]))
+    b = (_dets([[50, 50, 60, 60]], [0.5]), np.array([True]))
+    m = merge_group_detections([a, b], 0.15)
+    assert len(m.scores) == 3  # a cut box only joins boxes of another window it overlaps
 
 
 def test_merge_keeps_highest_and_filter_is_strict():

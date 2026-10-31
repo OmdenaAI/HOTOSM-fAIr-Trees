@@ -42,6 +42,7 @@ class InferenceParams:
     iou_threshold: float = 0.15
     edge_band: float = 0.05
     min_valid_fraction: float = 0.2
+    group_window_m: float = 120.0  # tree_group window; window_m is the tree window
 
 
 @dataclass(frozen=True)
@@ -186,6 +187,7 @@ def parse_inference_params(params: Mapping | None) -> InferenceParams:
         }
     )
     _in_range("window_m", p.window_m, 5, MAX_WINDOW_M)
+    _in_range("group_window_m", p.group_window_m, 5, MAX_WINDOW_M)
     _in_range("window_overlap", p.window_overlap, 0, 0.9)
     for name in ("confidence_threshold", "nms_threshold", "iou_threshold"):
         _in_range(name, getattr(p, name), 0, 1)

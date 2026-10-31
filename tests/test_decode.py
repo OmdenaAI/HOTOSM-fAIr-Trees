@@ -70,6 +70,17 @@ def test_planted_logit_decodes_to_its_anchor():
     assert d.boxes.dtype == np.float32 and d.scores.dtype == np.float32
 
 
+def test_decode_picks_the_class_column():
+    cls, box = _outputs((800, 800))
+    cls = np.concatenate([cls, cls], axis=2)
+    cls[0, CENTRE_ANCHOR_800, 1] = 5.0
+    assert len(decode_retinanet_output(cls, box, (800, 800), (800, 800), 0.1, 0.05).scores) == 0
+    d = decode_retinanet_output(cls[0], box[0], (800, 800), (800, 800), 0.1, 0.05, class_index=1)
+    np.testing.assert_allclose(d.boxes, [[384, 384, 416, 416]], atol=1e-4)
+    with pytest.raises(ValueError, match="class_index 2"):
+        decode_retinanet_output(cls, box, (800, 800), (800, 800), 0.1, 0.05, class_index=2)
+
+
 def test_dw_is_clamped_before_exp():
     idx = (50 * 200 + 50) * 9 + 3  # P3 row 50, col 50, aspect 1, size 32 at 800 x 1600
     cls, box = _outputs((800, 1600), {idx: 5.0}, {idx: [0.0, 0.0, 5.0, 0.0]})

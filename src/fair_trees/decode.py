@@ -1,7 +1,7 @@
 """Numpy RetinaNet decoding: anchors, box decode, deterministic NMS.
 
 Reproduces torchvision's AnchorGenerator and RetinaNet.postprocess_detections
-for a single-class head, working in model-input pixels (no CRS).
+one class at a time, working in model-input pixels (no CRS).
 """
 
 import math
@@ -104,12 +104,14 @@ def _decode_boxes(reg: np.ndarray, anchors: np.ndarray) -> np.ndarray:
     )
 
 
-def _squeeze_batch(a: np.ndarray, last: int, name: str) -> np.ndarray:
+def _squeeze_batch(a: np.ndarray, last: int | None, name: str) -> np.ndarray:
+    """(A, last) from (1, A, last) or (A, last); `last` None accepts any width."""
     a = np.asarray(a, np.float32)
     if a.ndim == 3 and a.shape[0] == 1:
         a = a[0]
-    if a.ndim != 2 or a.shape[1] != last:
-        raise ValueError(f"{name} must have shape (1, A, {last}) or (A, {last}), got {a.shape}")
+    if a.ndim != 2 or (last is not None and a.shape[1] != last):
+        want = "K" if last is None else last
+        raise ValueError(f"{name} must have shape (1, A, {want}) or (A, {want}), got {a.shape}")
     return a
 
 
@@ -120,12 +122,17 @@ def decode_retinanet_output(
     image_hw: tuple[int, int],
     confidence_threshold: float,
     nms_threshold: float,
+    class_index: int = 0,
 ) -> Detections:
-    """Decode raw single-class RetinaNet outputs into clipped, NMS-filtered detections.
+    """Decode one class of raw RetinaNet outputs into clipped, NMS-filtered detections.
 
-    `input_hw` is the padded network input; `image_hw` the resized, unpadded size boxes are clipped to.
+    `cls_logits` holds one column per class; `input_hw` is the padded network input; `image_hw` the
+    resized, unpadded size boxes are clipped to.
     """
-    logits = _squeeze_batch(cls_logits, 1, "cls_logits")[:, 0]
+    all_logits = _squeeze_batch(cls_logits, None, "cls_logits")
+    if not 0 <= class_index < all_logits.shape[1]:
+        raise ValueError(f"class_index {class_index} out of range for {all_logits.shape[1]} classes")
+    logits = all_logits[:, class_index]
     reg = _squeeze_batch(bbox_regression, 4, "bbox_regression")
     levels = make_anchors(*input_hw)
     total = sum(len(a) for a in levels)
@@ -183,20 +190,64 @@ def interior_sides(
     return sides
 
 
-def drop_edge_boxes(dets: Detections, window: Window, interior: set[str], band: float) -> Detections:
-    """Drop boxes reaching into the edge band of an interior window side."""
+def cut_boxes(dets: Detections, window: Window, interior: set[str], band: float) -> np.ndarray:
+    """Boxes (bool per box) reaching into the edge band of an interior window side."""
     bx, by = band * window.width, band * window.height
     x1, y1, x2, y2 = dets.boxes.T
-    drop = np.zeros(len(dets.scores), bool)
+    cut = np.zeros(len(dets.scores), bool)
     if "left" in interior:
-        drop |= x1 < window.x + bx
+        cut |= x1 < window.x + bx
     if "right" in interior:
-        drop |= x2 > window.x + window.width - bx
+        cut |= x2 > window.x + window.width - bx
     if "top" in interior:
-        drop |= y1 < window.y + by
+        cut |= y1 < window.y + by
     if "bottom" in interior:
-        drop |= y2 > window.y + window.height - by
-    return Detections(dets.boxes[~drop], dets.scores[~drop])
+        cut |= y2 > window.y + window.height - by
+    return cut
+
+
+def drop_edge_boxes(dets: Detections, window: Window, interior: set[str], band: float) -> Detections:
+    """Drop boxes reaching into the edge band of an interior window side."""
+    keep = ~cut_boxes(dets, window, interior, band)
+    return Detections(dets.boxes[keep], dets.scores[keep])
+
+
+def merge_group_detections(
+    parts: Sequence[tuple[Detections, np.ndarray]], iou_threshold: float
+) -> Detections:
+    """Join tree_group boxes cut by window edges, then NMS.
+
+    ``parts`` holds each window's boxes (mosaic pixels) and whether each is cut (``cut_boxes``). A cut box
+    joins every box of another window it overlaps, transitively; a joined set becomes its union extent with
+    the highest score.
+    """
+    if not parts:
+        return Detections.empty()
+    dets = concat_detections([d for d, _ in parts])
+    cut = np.concatenate([np.asarray(c, bool) for _, c in parts])
+    window = np.repeat(np.arange(len(parts)), [len(d.scores) for d, _ in parts])
+    b = dets.boxes.astype(np.float64)
+    parent = np.arange(len(b))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in np.flatnonzero(cut):  # one row at a time: memory stays linear in the box count
+        iw = np.minimum(b[i, 2], b[:, 2]) - np.maximum(b[i, 0], b[:, 0])
+        ih = np.minimum(b[i, 3], b[:, 3]) - np.maximum(b[i, 1], b[:, 1])
+        for j in np.flatnonzero((iw > 0) & (ih > 0) & (window != window[i])):
+            parent[find(j)] = find(i)
+    roots = np.array([find(i) for i in range(len(b))], np.int64)
+    boxes, scores = [], []
+    for r in np.unique(roots):
+        members = roots == r
+        boxes.append([*b[members, :2].min(axis=0), *b[members, 2:].max(axis=0)])
+        scores.append(dets.scores[members].max())
+    joined = Detections(np.asarray(boxes, np.float32).reshape(-1, 4), np.asarray(scores, np.float32))
+    return merge_window_detections(joined, iou_threshold)
 
 
 def merge_window_detections(dets: Detections, iou_threshold: float) -> Detections:

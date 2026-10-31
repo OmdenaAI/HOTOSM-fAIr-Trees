@@ -46,6 +46,19 @@ def test_ort_matches_torch(exported, hw):
     np.testing.assert_allclose(o_reg, t_reg, atol=2e-3)
 
 
+def test_export_k2_outputs_k_columns(tmp_path):
+    torch.manual_seed(0)
+    ckpt = tmp_path / "k2.pt"
+    torch.save(build_model(None, trainable_layers=0, num_classes=2).state_dict(), ckpt)
+    out = tmp_path / "k2.onnx"
+    subprocess.run([sys.executable, "-m", "fair_trees.export", str(ckpt), str(out)], check=True)
+    batch, _ = preprocess_window(np.random.default_rng(2).integers(0, 256, (256, 256, 3), dtype=np.uint8))
+    o_cls, _ = ort_run_fn(ort.InferenceSession(str(out), providers=["CPUExecutionProvider"]))(batch)
+    t_cls, _ = torch_run_fn(build_model(ckpt, trainable_layers=0), torch.device("cpu"))(batch)
+    assert o_cls.shape[-1] == 2
+    np.testing.assert_allclose(o_cls, t_cls, atol=2e-3)
+
+
 def test_cli_writes_onnx(tmp_path):
     torch.manual_seed(0)
     ckpt = tmp_path / "w.pt"
