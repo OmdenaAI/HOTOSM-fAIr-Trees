@@ -1,7 +1,9 @@
-# hot_platform.yaml with a second class: one box per tree and one per tree_group, from the release weights
-# (their tree head is kept and a group head is added). Crops reach 120 m so whole groups fit, as at the
-# 120 m group window; hot_platform_crop120.yaml is the tree-only control with the same crops.
-weights: weights/NEON.pt          # relative to the Drive root
+# hot_platform.yaml with a second class: one box per tree and one per tree_group, started from the 0.3 blend
+# of the release weights and the joint NEON + OAM-TCD base (NEON 0.638, OAM-TCD test 0.505; it adapts to HOT
+# better than the release weights: 0.550 against 0.518 HOT val). Its tree head is kept and a group head is
+# added. Crops reach 120 m so whole groups fit, as at the 120 m group window; hot_platform_crop120.yaml is
+# the tree-only control with the same crops.
+weights: runs/joint-base-wise-0.3/weights.pt  # relative to the Drive root
 sources: [hot]
 hyperparameters:
   num_classes: 2
