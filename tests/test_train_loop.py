@@ -231,6 +231,14 @@ def test_fine_tune_keeps_k1_unless_asked(monkeypatch, write_oam_chip, geo, weigh
         assert T.checkpoint_num_classes(state) == k
 
 
+def test_two_classes_without_group_labels_are_refused(monkeypatch, regions, weights, tmp_path):
+    script = Script([0.1])
+    cfg = dataclasses.replace(CFG, num_classes=2)
+    with pytest.raises(ValueError, match="tree_group"):
+        _run(monkeypatch, script, regions, weights, tmp_path / "run", cfg=cfg)
+    assert script.calls == 0 and not (tmp_path / "run").exists()
+
+
 def test_fine_tune_refuses_to_resume_on_changed_data(monkeypatch, write_oam_chip, geo, weights, tmp_path):
     chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(4)]
     labels = tmp_path / "labels.geojson"

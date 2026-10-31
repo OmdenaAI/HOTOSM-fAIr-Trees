@@ -549,6 +549,12 @@ def train(
     model = build_model(weights, trainable_layers=cfg.trainable_layers, num_classes=cfg.num_classes)
     model = model.to(device).train()
     num_classes = model.head.classification_head.num_classes
+    if num_classes == 2 and not any("tree_group" in r.classes for r in train_regions):
+        # the group rows would get no loss term and ship untrained
+        raise ValueError(
+            "a two-class model needs train regions that label tree_group (label 2); none do. "
+            "Use a tree-only model, or data with tree_group labels."
+        )
     ref = snapshot(model)
     w0 = state_hash(ref)
     chash = config_hash(cfg)
