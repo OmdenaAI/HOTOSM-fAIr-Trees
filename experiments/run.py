@@ -454,8 +454,11 @@ def _sampler_digests(run_dir: Path) -> dict[str, tuple[str, str]] | None:
         }
 
 
-def _val_part(run_dir: Path) -> dict:
-    return json.loads((run_dir / "eval.json").read_text())["parts"]["val"]
+def _eval_part(run_dir: Path, part: str = "val") -> dict:
+    parts = json.loads((run_dir / "eval.json").read_text())["parts"]
+    if part not in parts:
+        raise ValueError(f"{run_dir.name}: eval.json has no part {part!r}, only {sorted(parts)}")
+    return parts[part]
 
 
 def _unit_counts(part: Mapping) -> dict:
@@ -471,20 +474,28 @@ def _equal_over(a: Mapping | None, b: Mapping | None, epochs: Sequence[str], col
     return all(a[e][column] == b[e][column] for e in epochs)
 
 
-def compare_runs(a: str, b: str, *, drive_root: Path = DRIVE_ROOT) -> dict:
-    """Sampler digests over the common epochs and the val F1 of run ``b`` against run ``a``."""
+def compare_runs(
+    a: str, b: str, *, drive_root: Path = DRIVE_ROOT, part_a: str = "val", part_b: str | None = None
+) -> dict:
+    """Sampler digests over the common epochs and the F1 of part ``part_b`` of run ``b`` against part
+    ``part_a`` of run ``a`` (default: both ``val``), paired over their units.
+
+    Two different parts (e.g. ``val_group`` against ``val_group_merged``) may use different windows; the
+    same part must use the same one.
+    """
     from fair_trees.evaluate import paired_bootstrap_diff
 
+    part_b = part_b or part_a
     dir_a, dir_b = Path(drive_root) / "runs" / a, Path(drive_root) / "runs" / b
     dig_a, dig_b = _sampler_digests(dir_a), _sampler_digests(dir_b)
     epochs = sorted(set(dig_a) & set(dig_b), key=int) if dig_a is not None and dig_b is not None else []
 
-    val_a, val_b = _val_part(dir_a), _val_part(dir_b)
+    val_a, val_b = _eval_part(dir_a, part_a), _eval_part(dir_b, part_b)
     counts_a, counts_b = _unit_counts(val_a), _unit_counts(val_b)
     if set(counts_a) != set(counts_b):
         raise ValueError(f"runs {a} and {b} were evaluated on different val units")
     window_a, window_b = (v.get("window_m", DEFAULT_VAL["window_m"]) for v in (val_a, val_b))
-    if window_a != window_b:  # eval.json before window_m was recorded scored val at the 40 m default
+    if part_a == part_b and window_a != window_b:  # eval.json before window_m: the 40 m default
         raise ValueError(
             f"runs {a} and {b} were scored with different val windows: {window_a} m and {window_b} m"
         )
@@ -494,6 +505,8 @@ def compare_runs(a: str, b: str, *, drive_root: Path = DRIVE_ROOT) -> dict:
     return {
         "a": a,
         "b": b,
+        "part_a": part_a,
+        "part_b": part_b,
         "common_epochs": len(epochs),
         "plan_equal": _equal_over(dig_a, dig_b, epochs, 0),
         "sample_ids_equal": _equal_over(dig_a, dig_b, epochs, 1),

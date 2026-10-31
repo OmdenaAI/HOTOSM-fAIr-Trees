@@ -403,6 +403,20 @@ def _fake_run(drive, run_id, digests, unit_counts, window_m=None):
     (d / "eval.json").write_text(json.dumps({"parts": {"val": val}}))
 
 
+def test_compare_runs_pairs_two_named_parts(tmp_path):
+    # a two-class run's val_group against a tree-only run's crown-merge baseline: same units, other windows
+    _fake_run(tmp_path, "groups", [("p0", "s0")], [(1, 0, 0)], window_m=120.0)
+    _fake_run(tmp_path, "merged", [("p0", "s0")], [(0, 1, 1)], window_m=60.0)
+    for run_id, part in (("groups", "val_group"), ("merged", "val_group_merged")):
+        path = tmp_path / "runs" / run_id / "eval.json"
+        path.write_text(json.dumps({"parts": {part: json.loads(path.read_text())["parts"]["val"]}}))
+    r = run.compare_runs(
+        "merged", "groups", drive_root=tmp_path, part_a="val_group_merged", part_b="val_group"
+    )
+    assert (r["f1_a"], r["f1_b"], r["paired_diff"][0]) == (0.0, 1.0, 1.0)
+    assert (r["part_a"], r["part_b"]) == ("val_group_merged", "val_group")
+
+
 def test_compare_runs(tmp_path):
     counts = [(8, 2, 1), (5, 1, 2), (9, 0, 1), (4, 3, 2)]
     _fake_run(tmp_path, "a", [("p0", "s0"), ("p1", "s1")], counts)
