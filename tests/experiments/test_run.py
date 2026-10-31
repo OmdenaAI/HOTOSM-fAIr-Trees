@@ -229,6 +229,63 @@ def test_evaluate_writes_parts(monkeypatch, setup, fake_session):
     assert "f1_ci95" in neon and "f1_ci95" in out["parts"]["val"]
 
 
+P3_800 = 100  # P3 locations per row at an 800 px input; a P3 anchor's box is 32 input px
+
+
+def _p3(row, col):
+    return (row * P3_800 + col) * 9 + 3  # aspect 1.0, size 32
+
+
+GROUP_PX = (
+    2048 + 123,
+    123,
+    2048 + 154,
+    154,
+)  # on tile (8, 0); 3 x 3 touching crowns at P3 (50 + 4i, 50 + 4j)
+
+
+def _group_region(write_region, data):
+    from fair_trees.params import CLASSES
+
+    write_region("g", tiles=((8, 0),), root=data / "neon", split="val", groups_px=[GROUP_PX], classes=CLASSES)
+
+
+def test_evaluate_adds_val_group_for_k2(monkeypatch, setup, write_region, fake_session):
+    data, drive, _, bench = setup
+    _group_region(write_region, data)
+    session = fake_session({(_p3(50, 50), 1): 5.0}, num_classes=2)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(session))
+    out = run.evaluate("r1", bench, drive_root=drive, data_root=data)
+    assert out["parts"]["val_group"]["window_m"] == 120.0
+    assert [u["unit_id"] for u in out["parts"]["val_group"]["units"]] == ["g"]
+    assert "val_group_merged" not in out["parts"]
+
+
+def test_evaluate_adds_merged_baseline_for_k1(monkeypatch, setup, write_region, fake_session):
+    data, drive, _, bench = setup
+    _group_region(write_region, data)
+    crowns = {_p3(50 + 4 * i, 50 + 4 * j): 5.0 for i in range(3) for j in range(3)}
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session(crowns)))
+    out = run.evaluate("r1", bench, drive_root=drive, data_root=data)
+    merged = out["parts"]["val_group_merged"]
+    assert (merged["precision"], merged["recall"], merged["f1"]) == (1.0, 1.0, 1.0)
+    assert merged["setting"] == {"score": 0.2, "gap_m": 2.0, "min_crowns": 8}
+    assert [u["unit_id"] for u in merged["units"]] == ["g"] and "f1_ci95" in merged
+    assert "val_group" not in out["parts"]
+
+
+def test_export_k2_checkpoint(setup):
+    pytest.importorskip("onnx")
+    pytest.importorskip("onnxruntime")
+    from fair_trees.train import build_model
+
+    data, drive, _, bench = setup
+    torch.manual_seed(0)
+    model = build_model(None, trainable_layers=0, num_classes=2)
+    torch.save(model.state_dict(), drive / "runs" / "r1" / "best.pt")
+    assert run.export("r1", bench, drive_root=drive, data_root=data)["pass"] is True
+
+
 def _val_conf(max_regions):
     return {"sources": ["neon", "oamtcd"], "val": {**run.DEFAULT_VAL, "max_regions": max_regions}}
 

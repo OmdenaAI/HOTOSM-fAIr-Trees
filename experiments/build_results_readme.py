@@ -40,7 +40,7 @@ def collect(results_dir: Path) -> list[dict]:
                     "recall": report["recall"],
                     "f1": report["f1"],
                     "f1_ci95": report["f1_ci95"],
-                    "ap40": report["ap40"],
+                    "ap40": report.get("ap40"),  # absent for a part scored at one setting (no sweep)
                     "aoi_f1": report["aoi_f1"],
                     "n_units": len(report["units"]),
                 }
@@ -50,9 +50,10 @@ def collect(results_dir: Path) -> list[dict]:
 
 def _line(r: dict) -> str:
     lo, hi = r["f1_ci95"]
+    ap40 = "–" if r["ap40"] is None else f"{r['ap40']:.3f}"
     return (
         f"| {r['run_id']} | {r['part']} | {r['precision']:.3f} | {r['recall']:.3f} | "
-        f"{r['f1']:.3f} [{lo:.3f}, {hi:.3f}] | {r['ap40']:.3f} | {r['aoi_f1']:.3f} | {r['n_units']} |"
+        f"{r['f1']:.3f} [{lo:.3f}, {hi:.3f}] | {ap40} | {r['aoi_f1']:.3f} | {r['n_units']} |"
     )
 
 

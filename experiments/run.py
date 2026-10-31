@@ -35,7 +35,9 @@ BENCHMARK = Path(__file__).parent / "benchmark.json"
 
 CONFIG_KEYS = ("weights", "sources", "hyperparameters", "val", "mlflow")
 REQUIRED_KEYS = ("weights", "sources")
-DEFAULT_VAL = {"zooms": [20, 19], "max_regions": None, "window_m": 40.0}
+DEFAULT_VAL = {"zooms": [20, 19], "max_regions": None, "window_m": 40.0, "group_window_m": 120.0}
+# the label study's crown-merge setting, the group baseline for a tree-only model
+MERGED_GROUPS = {"score": 0.2, "gap_m": 2.0, "min_crowns": 8}
 MLFLOW_EXPERIMENT = "fair_trees"
 PARITY_UNITS = 3
 PARITY_ATOL = 2e-3
@@ -83,10 +85,16 @@ def _stored_config(path: Path) -> dict:
 
 
 def val_params(conf: Mapping) -> "InferenceParams":
-    """Inference params to score val regions with the configured window."""
+    """Inference params to score val regions with the configured tree and group windows."""
     from fair_trees.params import parse_inference_params
 
-    return parse_inference_params({"window_m": conf["val"]["window_m"]})
+    val = conf["val"]
+    return parse_inference_params(
+        {
+            "window_m": val["window_m"],
+            "group_window_m": val.get("group_window_m", DEFAULT_VAL["group_window_m"]),
+        }
+    )
 
 
 def repo_sha() -> str:
@@ -293,6 +301,54 @@ def _with_ci(report) -> dict:
     return report.to_dict() | {"f1_ci95": list(bootstrap_ci(report.unit_counts()))}
 
 
+def _num_classes(run_fn: "RunFn") -> int:
+    """Classes the model outputs, from one forward pass on an empty window."""
+    import numpy as np
+
+    return run_fn(np.zeros((1, 3, 800, 800), np.float32))[0].shape[-1]
+
+
+def _merged_groups(
+    run_fn: "RunFn", regions: Sequence, params: "InferenceParams", zooms: Sequence[int]
+) -> dict:
+    """Group boxes built by merging a tree-only model's crowns (``MERGED_GROUPS``), scored like a group
+    head."""
+    from experiments.label_study.merge import merge_crowns
+    from fair_trees.decode import filter_score
+    from fair_trees.evaluate import (
+        Counts,
+        _drop_ignored,
+        aoi_f1,
+        bootstrap_ci,
+        count_matches,
+        prf,
+        region_units,
+    )
+    from fair_trees.serve import predict_mosaic
+
+    rows, counts = [], []
+    for u in region_units(regions, zooms=zooms, label=2):
+        crowns = filter_score(predict_mosaic(run_fn, u.mosaic, params), MERGED_GROUPS["score"])
+        groups = merge_crowns(
+            crowns, MERGED_GROUPS["gap_m"] / u.mosaic.gsd_m, MERGED_GROUPS["min_crowns"]
+        ).groups
+        if u.ignore_mask is not None:
+            groups = _drop_ignored(groups, u.ignore_mask)
+        c = count_matches(groups.boxes, u.gt_boxes)
+        counts.append(c)
+        rows.append({"unit_id": u.unit_id, "meta": dict(u.meta), "tp": c.tp, "fp": c.fp, "fn": c.fn})
+    p, r, f1 = prf(sum(counts, Counts(0, 0, 0)))
+    return {
+        "precision": p,
+        "recall": r,
+        "f1": f1,
+        "aoi_f1": aoi_f1(counts),
+        "f1_ci95": list(bootstrap_ci(counts)),
+        "units": rows,
+        "setting": dict(MERGED_GROUPS),
+    }
+
+
 def evaluate(
     run_id: str,
     benchmark: Path,
@@ -322,8 +378,15 @@ def evaluate(
 
     _, val = _regions(conf, data_root)
     params = val_params(conf)
-    report = evaluate_regions(run_fn, val, params, zooms=conf["val"]["zooms"])
+    zooms = conf["val"]["zooms"]
+    report = evaluate_regions(run_fn, val, params, zooms=zooms)
     parts = {"val": _with_ci(report) | {"window_m": params.window_m}}
+    if any("tree_group" in r.classes for r in val):
+        if _num_classes(run_fn) == 2:
+            report = evaluate_regions(run_fn, val, params, zooms=zooms, label=2)
+            parts["val_group"] = _with_ci(report) | {"window_m": params.group_window_m}
+        else:
+            parts["val_group_merged"] = _merged_groups(run_fn, val, params, zooms)
     for name, part, units in _benchmark_parts(benchmark, data_root):
         if part["kind"] == "regions":  # report-only: no forgetting bound
             report = evaluate_units(run_fn, units, InferenceParams(window_m=part["window_m"]))
@@ -362,9 +425,7 @@ def export(
             f"{benchmark}: no staged NEON benchmark units under {data_root} for the parity check"
         )
 
-    model = build_model(None, trainable_layers=0)
-    state = torch.load(out_dir / "best.pt", map_location="cpu", weights_only=True)
-    model.load_state_dict(state, strict=True)
+    model = build_model(out_dir / "best.pt", trainable_layers=0)  # one or two classes, as trained
     data = export_onnx_bytes(model)
     (out_dir / "model.onnx").write_bytes(data)
 

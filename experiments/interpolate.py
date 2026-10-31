@@ -37,16 +37,23 @@ def interpolate(base: Path, tuned: Path, alpha: float, out: Path) -> Path:
     """Blend two model checkpoints into ``out`` and return it.
 
     Both are read through the model, so a checkpoint saved by an older torchvision (the release weights
-    keep the old FPN key names) is renamed to the current layout before blending.
+    keep the old FPN key names) is renamed to the current layout before blending. A tree-only base blended
+    with a two-class run is grown to two classes first and takes the run's tree_group rows unblended (the
+    base has none worth keeping); a two-class base with a tree-only run is refused.
     """
     import torch
 
-    from fair_trees.train import build_model
+    from fair_trees.train import CLS_BIAS, CLS_WEIGHT, build_model, checkpoint_num_classes
 
-    states = [build_model(p, trainable_layers=0).state_dict() for p in (base, tuned)]
+    tuned_state = build_model(tuned, trainable_layers=0).state_dict()
+    k = checkpoint_num_classes(tuned_state)
+    base_state = build_model(base, trainable_layers=0, num_classes=k).state_dict()
+    if k == 2 and checkpoint_num_classes(torch.load(base, map_location="cpu", weights_only=True)) == 1:
+        for key in (CLS_WEIGHT, CLS_BIAS):
+            base_state[key][1::2] = tuned_state[key][1::2]
     out = Path(out)
     out.parent.mkdir(parents=True, exist_ok=True)
-    torch.save(blend(*states, alpha), out)
+    torch.save(blend(base_state, tuned_state, alpha), out)
     return out
 
 
