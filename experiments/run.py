@@ -271,9 +271,10 @@ def _run_fn(weights: Path, device: str | None) -> "RunFn":
     return torch_run_fn(build_model(weights, trainable_layers=0), dev)
 
 
-def _benchmark_parts(benchmark: Path, data_root: Path) -> Iterator[tuple[str, dict, list]]:
-    """(name, part, units) for each NEON eval-plot or region part whose data is staged; units must match
-    the freeze."""
+def _benchmark_parts(benchmark: Path, data_root: Path) -> Iterator[tuple[str, dict, list, list]]:
+    """(name, part, units, group_units) for each NEON eval-plot or region part whose data is staged; units
+    must match the freeze. ``group_units`` are the tree_group units of a region part whose regions label
+    groups (else empty)."""
     from experiments.neon_eval import load_eval_plots
     from fair_trees.dataset import load_regions
     from fair_trees.evaluate import region_units
@@ -285,14 +286,16 @@ def _benchmark_parts(benchmark: Path, data_root: Path) -> Iterator[tuple[str, di
         if not root.exists():
             logger.warning(f"benchmark part {name}: {root} not staged, skipped")
             continue
+        group_units = []
         if part["kind"] == "regions":
             regions = [r for r in load_regions(root) if r.split == part["split"]]
             units = region_units(regions, zooms=part["zooms"])
+            group_units = region_units(regions, zooms=part["zooms"], label=2)
         else:
             units = load_eval_plots(root)
         if [u.unit_id for u in units] != part["unit_ids"]:
             raise ValueError(f"benchmark part {name}: units differ from the frozen list")
-        yield name, part, units
+        yield name, part, units, group_units
 
 
 def _with_ci(report) -> dict:
@@ -381,16 +384,21 @@ def evaluate(
     zooms = conf["val"]["zooms"]
     report = evaluate_regions(run_fn, val, params, zooms=zooms)
     parts = {"val": _with_ci(report) | {"window_m": params.window_m}}
+    two_classes = _num_classes(run_fn) == 2
     if any("tree_group" in r.classes for r in val):
-        if _num_classes(run_fn) == 2:
+        if two_classes:
             report = evaluate_regions(run_fn, val, params, zooms=zooms, label=2)
             parts["val_group"] = _with_ci(report) | {"window_m": params.group_window_m}
         else:
             parts["val_group_merged"] = _merged_groups(run_fn, val, params, zooms)
-    for name, part, units in _benchmark_parts(benchmark, data_root):
+    for name, part, units, group_units in _benchmark_parts(benchmark, data_root):
         if part["kind"] == "regions":  # report-only: no forgetting bound
-            report = evaluate_units(run_fn, units, InferenceParams(window_m=part["window_m"]))
+            part_params = InferenceParams(window_m=part["window_m"], group_window_m=params.group_window_m)
+            report = evaluate_units(run_fn, units, part_params)
             parts[name] = _with_ci(report) | {"window_m": part["window_m"]}
+            if two_classes and group_units:
+                report = evaluate_units(run_fn, group_units, part_params, class_index=1)
+                parts[f"{name}_group"] = _with_ci(report) | {"window_m": params.group_window_m}
             continue
         report = evaluate_units(run_fn, units, DF_COMPAT, ignore=False)
         lower = float(part["release_f1_ci95"][0])
@@ -418,7 +426,9 @@ def export(
     from fair_trees.train import build_model, torch_run_fn
 
     out_dir = Path(drive_root) / "runs" / run_id
-    neon = (us for _, part, us in _benchmark_parts(benchmark, data_root) if part["kind"] == "neon_eval_plots")
+    neon = (
+        us for _, part, us, _ in _benchmark_parts(benchmark, data_root) if part["kind"] == "neon_eval_plots"
+    )
     units = [u for us in neon for u in us][:PARITY_UNITS]
     if not units:
         raise ValueError(

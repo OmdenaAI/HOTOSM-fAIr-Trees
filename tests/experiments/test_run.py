@@ -345,6 +345,25 @@ def test_evaluate_scores_a_regions_part(monkeypatch, setup, write_region, fake_s
     assert [u["unit_id"] for u in part["units"]] == ["t1"]
 
 
+def test_evaluate_scores_groups_of_a_regions_part_for_k2(monkeypatch, setup, write_region, fake_session):
+    from fair_trees.params import CLASSES
+
+    data, drive, _, bench = setup
+    write_region(
+        "t1", tiles=((8, 0),), root=data / "oamtcd", source="oamtcd", split="test",
+        groups_px=[GROUP_PX], classes=CLASSES,
+    )  # fmt: skip
+    _add_regions_part(bench)
+    session = fake_session({(_p3(50, 50), 1): 5.0}, num_classes=2)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(session))
+    out = run.evaluate("r1", bench, drive_root=drive, data_root=data)
+    group = out["parts"]["oamtcd_group"]
+    assert [u["unit_id"] for u in group["units"]] == ["t1"] and group["window_m"] == 120.0
+    assert "f1_ci95" in group and "forgetting_pass" not in group
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+    assert "oamtcd_group" not in run.evaluate("r1", bench, drive_root=drive, data_root=data)["parts"]
+
+
 def test_evaluate_skips_an_unstaged_regions_part(monkeypatch, setup, fake_session):
     data, drive, _, bench = setup
     _add_regions_part(bench)
