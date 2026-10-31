@@ -1,4 +1,5 @@
 import dataclasses
+import json
 
 import numpy as np
 
@@ -49,6 +50,19 @@ def test_group_label_gives_box_and_tree_unsupervised_inside(write_region):
     assert not s.unsupervised[0][75:].any() and not s.unsupervised[0][:, 95:].any()
     assert not s.unsupervised[1].any()
     assert (s.rgb[13:71, 13:91] > 0).all()  # a group is not blacked out
+
+
+def test_tree_stays_supervised_in_a_group_hole(write_region, geo):
+    d = write_region("r", boxes_px=[(95, 95, 105, 105)], classes=CLASSES)
+    outer = geo.px_to_4326([(40, 40), (40, 160), (160, 160), (160, 40), (40, 40)])
+    hole = geo.px_to_4326([(80, 80), (120, 80), (120, 120), (80, 120), (80, 80)])
+    labels = json.loads((d / "labels.geojson").read_text())
+    group = {"type": "Polygon", "coordinates": [outer, hole]}
+    labels["features"].append({"type": "Feature", "geometry": group, "properties": {"label": 2}})
+    (d / "labels.geojson").write_text(json.dumps(labels))
+    s = load_sample(_spec(), RegionCache(load_regions(d.parent)), NO_AUG)  # crop origin (28, 28)
+    assert s.unsupervised[0][15:50, 15:50].all()  # inside the group, outside its hole
+    assert not s.unsupervised[0][55:89, 55:89].any()  # the hole, where the tree is
 
 
 def test_group_cut_by_crop_is_unsupervised(write_region):

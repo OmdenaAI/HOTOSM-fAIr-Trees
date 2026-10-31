@@ -179,10 +179,15 @@ def rasterize_mask(
 def rasterize_labels(
     region: Region, transform_3857: Affine, shape: tuple[int, int], label: int
 ) -> np.ndarray:
-    """(H, W) bool, True inside the polygons of the region's class-``label`` labels."""
+    """(H, W) bool, True inside the polygons of the region's class-``label`` labels (holes stay False, as
+    for ignore polygons)."""
     shapes = [
-        ({"type": "Polygon", "coordinates": [_ring_3857(ring)]}, 1)
-        for ring in label_rings(load_geojson(region.labels_path), label)
+        (_project_geometry(f["geometry"]), 1)
+        for f in load_geojson(region.labels_path).get("features", [])
+        if _label_of(f.get("properties") or {}) == label
+        and f.get("geometry")
+        and f["geometry"].get("type") in ("Polygon", "MultiPolygon")
+        and f["geometry"].get("coordinates")
     ]
     if not shapes:
         return np.zeros(shape, bool)
@@ -190,11 +195,6 @@ def rasterize_labels(
         shapes, out_shape=shape, transform=transform_3857, fill=0, dtype="uint8"
     )
     return burned == 1
-
-
-def _ring_3857(ring: np.ndarray) -> list[list[float]]:
-    x, y = _TO_3857.transform(ring[:, 0], ring[:, 1])
-    return np.column_stack([x, y]).tolist()
 
 
 def boxes_in_window(
