@@ -40,7 +40,7 @@ from fair_trees.dataset import (
     total_chips,
 )
 from fair_trees.evaluate import EvalUnit, evaluate_units, region_units
-from fair_trees.params import InferenceParams, TrainParams, parse_train_params
+from fair_trees.params import CLASSES, InferenceParams, TrainParams, parse_train_params
 from fair_trees.preprocess import preprocess_window
 from fair_trees.serve import RunFn
 
@@ -442,27 +442,36 @@ def amp_dtype(device: torch.device, amp: bool) -> torch.dtype | None:
 
 
 def _validate(
-    model: RetinaNet, device: torch.device, units: Sequence[EvalUnit], params: InferenceParams, epoch: int
+    model: RetinaNet,
+    device: torch.device,
+    units: Mapping[str, Sequence[EvalUnit]],
+    params: InferenceParams,
+    epoch: int,
 ) -> dict:
     """Val metrics through the serving decode path; puts the model back in train mode.
 
-    When the units come from several sources, each source is scored on its own and the scores are the
-    equal-weight means over sources (with ``f1_max_<source>`` and ``ap40_<source>`` alongside), so a large
-    source cannot drown out a small one in early stopping.
+    ``units`` maps a class name to its units. Each (source, class) is scored on its own and the scores are
+    the equal-weight means over them (with ``f1_max_<source>`` / ``ap40_<source>`` for trees and
+    ``f1_max_<source>_tree_group`` / ``ap40_<source>_tree_group`` for groups alongside when there are
+    several), so neither a large source nor one class drowns out the rest in early stopping.
     """
     t0 = time.monotonic()
     run_fn = torch_run_fn(model, device)
-    by_source: dict[str, list[EvalUnit]] = {}
-    for u in units:
-        by_source.setdefault(u.meta["source"], []).append(u)
-    reports = {s: evaluate_units(run_fn, us, params) for s, us in sorted(by_source.items())}
+    reports = {}
+    for name, class_units in units.items():
+        by_source: dict[str, list[EvalUnit]] = {}
+        for u in class_units:
+            by_source.setdefault(u.meta["source"], []).append(u)
+        for s, us in sorted(by_source.items()):
+            key = s if name == "tree" else f"{s}_{name}"
+            reports[key] = evaluate_units(run_fn, us, params, class_index=CLASSES.index(name))
     model.train()
     keys = ("f1_max", "conf_at_max", "ap40", "aoi_f1")
     metrics = {k: float(np.mean([getattr(r, k) for r in reports.values()])) for k in keys}
     if len(reports) > 1:
-        for s, r in reports.items():
+        for key, r in reports.items():
             # not "f1_max/<source>": MLflow's file store cannot hold "f1_max" as both a file and a folder
-            metrics |= {f"f1_max_{s}": r.f1_max, f"ap40_{s}": r.ap40}
+            metrics |= {f"f1_max_{key}": r.f1_max, f"ap40_{key}": r.ap40}
     return metrics | {"seconds": time.monotonic() - t0}
 
 
@@ -590,7 +599,9 @@ def train(
         _supersede(out_dir)
 
     # after the resume check, so a finished run returns without reading the val set
-    val_units = region_units(val_regions, zooms=val_zooms) if val_regions else []
+    val_units = {"tree": region_units(val_regions, zooms=val_zooms)} if val_regions else {}
+    if num_classes == 2 and any("tree_group" in r.classes for r in val_regions):
+        val_units["tree_group"] = region_units(val_regions, zooms=val_zooms, label=2)
     if not val_regions:
         logger.warning("no val regions: every epoch counts as an improvement and best.pt is the last epoch")
 

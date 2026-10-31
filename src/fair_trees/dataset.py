@@ -211,11 +211,11 @@ def boxes_in_window(
     A box is kept when at least ``min_fraction`` of its unclipped area is unmasked pixels (by pixel
     centre) inside the window. ``unmasked`` is the window-sized (height, width) boolean image.
     """
-    clipped, kept = _window_boxes(boxes, unmasked, x0, y0, width, height, min_fraction)
+    clipped, kept = window_boxes(boxes, unmasked, x0, y0, width, height, min_fraction)
     return clipped[kept]
 
 
-def _window_boxes(
+def window_boxes(
     boxes: np.ndarray, unmasked: np.ndarray, x0: int, y0: int, width: int, height: int, min_fraction: float
 ) -> tuple[np.ndarray, np.ndarray]:
     """Every box of positive area clipped to the window, float32 (M, 4), and whether the 40 % rule keeps
@@ -693,9 +693,16 @@ def _unsupervised(region: Region, crop_t: Affine, n: int, dropped_groups: np.nda
             out[c] = True
     if "tree_group" in region.classes:
         out[0] |= rasterize_labels(region, crop_t, (n, n), 2)
-        edges = np.ceil(dropped_groups - 0.5).astype(np.int64)  # pixel centres inside, as boxes_in_window
-        for x1, y1, x2, y2 in np.clip(edges, 0, n):
-            out[1, y1:y2, x1:x2] = True
+        out[1] |= burn_boxes(dropped_groups, (n, n))
+    return out
+
+
+def burn_boxes(boxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """(H, W) bool, True on the pixels whose centre lies inside any of the boxes (as ``boxes_in_window``)."""
+    out = np.zeros(shape, bool)
+    edges = np.ceil(np.asarray(boxes, np.float64).reshape(-1, 4) - 0.5).astype(np.int64)
+    for x1, y1, x2, y2 in np.clip(edges, 0, [shape[1], shape[0], shape[1], shape[0]]):
+        out[y1:y2, x1:x2] = True
     return out
 
 
@@ -728,7 +735,7 @@ def load_sample(spec: SampleSpec, cache: RegionCache, cfg: TrainParams) -> Sampl
     crop_t = geom.transform_3857 @ Affine.translation(w.x, w.y)
     masked = ~valid | rasterize_mask(region, crop_t, (n, n))
     trees = boxes_in_window(geom.boxes, ~masked, w.x, w.y, n, n)
-    groups, kept = _window_boxes(geom.group_boxes, ~masked, w.x, w.y, n, n, MIN_BOX_FRACTION)
+    groups, kept = window_boxes(geom.group_boxes, ~masked, w.x, w.y, n, n, MIN_BOX_FRACTION)
     unsupervised = _unsupervised(region, crop_t, n, groups[~kept])
     boxes = np.concatenate([trees, groups[kept]])
     labels = np.repeat(np.arange(2, dtype=np.int64), [len(trees), int(kept.sum())])

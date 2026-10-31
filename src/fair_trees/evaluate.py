@@ -11,11 +11,20 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from fair_trees.dataset import Region, boxes_in_window, labels_to_boxes, load_geojson, rasterize_mask
+from fair_trees.dataset import (
+    MIN_BOX_FRACTION,
+    Region,
+    burn_boxes,
+    labels_to_boxes,
+    load_geojson,
+    rasterize_labels,
+    rasterize_mask,
+    window_boxes,
+)
 from fair_trees.decode import Detections, filter_score
-from fair_trees.params import InferenceParams
+from fair_trees.params import CLASSES, InferenceParams
 from fair_trees.preprocess import Mosaic, mosaic_chips
-from fair_trees.serve import RunFn, predict_mosaic
+from fair_trees.serve import RunFn, predict_mosaic_classes
 
 
 def iou_matrix(a: np.ndarray, b: np.ndarray) -> np.ndarray:
@@ -194,14 +203,16 @@ def evaluate_units(
     iou_threshold: float = 0.4,
     ignore: bool = True,
     decode_threshold: float = DECODE_THRESHOLD,
+    class_index: int = 0,
 ) -> EvalReport:
-    """Decode each unit once at a low threshold, then score at the operating point and a sweep."""
+    """Decode each unit's class ``class_index`` once at a low threshold, then score at the operating point
+    and a sweep."""
     low_params = dataclasses.replace(
         params, confidence_threshold=min(decode_threshold, params.confidence_threshold)
     )
     decoded = []
     for u in units:
-        dets = predict_mosaic(run_fn, u.mosaic, low_params)
+        dets = predict_mosaic_classes(run_fn, u.mosaic, low_params, (class_index,))[0]
         if ignore and u.ignore_mask is not None:
             dets = _drop_ignored(dets, np.asarray(u.ignore_mask, dtype=bool))
         decoded.append(dets)
@@ -254,30 +265,47 @@ def evaluate_units(
     )
 
 
-def region_units(regions: Sequence[Region], *, zooms: Sequence[int] = (20, 19)) -> list[EvalUnit]:
-    """One unit per mosaic of each region, at the first of ``zooms`` the region has (else its lowest).
+def region_units(
+    regions: Sequence[Region], *, zooms: Sequence[int] = (20, 19), label: int = 1
+) -> list[EvalUnit]:
+    """One unit per mosaic of each region labelling class ``label`` (1 tree, 2 tree_group), at the first of
+    ``zooms`` the region has (else its lowest).
 
     Ignore polygons only mask predictions; labels are dropped only where the footprint or chip validity
-    masks them.
+    masks them. In a region labelling tree_group, tree predictions inside a group polygon are ignored, and
+    so are group predictions inside a group the 40 % rule drops at the unit's edge.
     """
+    name = CLASSES[label - 1]
     units = []
     for region in regions:
+        if name not in region.classes:
+            continue
         z = next((z for z in zooms if z in region.chips), None)
         if z is None:
             z = min(region.chips)
         mosaics = mosaic_chips(region.chips[z], use_sidecar=False)
         labels = load_geojson(region.labels_path)
         has_mask = region.footprint is not None or region.ignore_path is not None
+        groups = "tree_group" in region.classes
         for k, m in enumerate(mosaics):
             h, w = m.rgb.shape[:2]
-            boxes = labels_to_boxes(labels, m.transform_3857)
+            boxes = labels_to_boxes(labels, m.transform_3857, label)
             unmasked = m.valid & ~rasterize_mask(region, m.transform_3857, (h, w), ignore=False)
+            clipped, kept = window_boxes(boxes, unmasked, 0, 0, w, h, MIN_BOX_FRACTION)
+            mask = rasterize_mask(region, m.transform_3857, (h, w)) if has_mask else None
+            if groups:
+                extra = (
+                    rasterize_labels(region, m.transform_3857, (h, w), 2)
+                    if label == 1
+                    else burn_boxes(clipped[~kept], (h, w))
+                )
+                mask = extra if mask is None else mask | extra
             units.append(
                 EvalUnit(
                     unit_id=region.id if len(mosaics) == 1 else f"{region.id}#{k}",
                     mosaic=m,
-                    gt_boxes=boxes_in_window(boxes, unmasked, 0, 0, w, h),
-                    ignore_mask=rasterize_mask(region, m.transform_3857, (h, w)) if has_mask else None,
+                    gt_boxes=clipped[kept],
+                    ignore_mask=mask,
                     meta={"source": region.source, "biome": region.biome, "zoom": str(z)},
                 )
             )
@@ -293,15 +321,17 @@ def evaluate_regions(
     thresholds: np.ndarray = SWEEP_THRESHOLDS,
     iou_threshold: float = 0.4,
     ignore: bool = True,
+    label: int = 1,
 ) -> EvalReport:
-    """Evaluate on region mosaics with crowd ignore; see ``region_units`` for how units are built."""
+    """Evaluate class ``label`` on region mosaics with crowd ignore; see ``region_units`` for the units."""
     return evaluate_units(
         run_fn,
-        region_units(regions, zooms=zooms),
+        region_units(regions, zooms=zooms, label=label),
         params,
         thresholds=thresholds,
         iou_threshold=iou_threshold,
         ignore=ignore,
+        class_index=label - 1,
     )
 
 

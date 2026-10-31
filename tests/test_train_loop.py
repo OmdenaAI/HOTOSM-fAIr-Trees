@@ -294,11 +294,13 @@ def test_resume_without_a_readable_checkpoint_is_refused(monkeypatch, regions, w
 
 
 def _stub_reports(monkeypatch, by_source):
+    """``by_source`` maps a source, or ``(source, class_index)``, to the (f1_max, ap40) it reports."""
     calls = []
 
-    def fake_evaluate_units(run_fn, units, params):
+    def fake_evaluate_units(run_fn, units, params, *, class_index=0):
         calls.append([u.meta["source"] for u in units])
-        f1, ap = by_source[units[0].meta["source"]]
+        source = units[0].meta["source"]
+        f1, ap = by_source.get((source, class_index)) or by_source[source]
         return SimpleNamespace(f1_max=f1, conf_at_max=0.3, ap40=ap, aoi_f1=f1)
 
     monkeypatch.setattr(T, "evaluate_units", fake_evaluate_units)
@@ -312,7 +314,7 @@ def _units(*sources):
 def test_validate_balances_sources(monkeypatch):
     calls = _stub_reports(monkeypatch, {"a": (0.8, 0.6), "b": (0.2, 0.4)})
 
-    units = _units("a", "b", "a", "b")
+    units = {"tree": _units("a", "b", "a", "b")}
     v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
 
     assert v["f1_max"] == pytest.approx(0.5) and v["ap40"] == pytest.approx(0.5)
@@ -325,8 +327,21 @@ def test_validate_balances_sources(monkeypatch):
 def test_validate_single_source_unchanged(monkeypatch):
     calls = _stub_reports(monkeypatch, {"a": (0.7, 0.5)})
 
-    v = T._validate(torch.nn.Identity(), torch.device("cpu"), _units("a", "a"), InferenceParams(), 0)
+    v = T._validate(
+        torch.nn.Identity(), torch.device("cpu"), {"tree": _units("a", "a")}, InferenceParams(), 0
+    )
 
     assert calls == [["a", "a"]]
     assert set(v) == {"f1_max", "conf_at_max", "ap40", "aoi_f1", "seconds"}
     assert v["f1_max"] == 0.7
+
+
+def test_validate_means_over_source_and_class(monkeypatch):
+    calls = _stub_reports(monkeypatch, {("hot", 0): (0.6, 0.5), ("hot", 1): (0.2, 0.1)})
+    units = {"tree": _units("hot", "hot"), "tree_group": _units("hot")}
+
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    assert v["f1_max"] == pytest.approx(0.4) and v["ap40"] == pytest.approx(0.3)
+    assert v["f1_max_hot"] == 0.6 and v["f1_max_hot_tree_group"] == 0.2 and v["ap40_hot_tree_group"] == 0.1
+    assert sorted(calls) == [["hot"], ["hot", "hot"]]
