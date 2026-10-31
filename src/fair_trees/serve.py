@@ -1,7 +1,7 @@
 """Serving entry points: sliding-window prediction over a mosaic and the fAIr chip-directory API."""
 
 import logging
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import NamedTuple
 
@@ -60,20 +60,23 @@ class _WindowRun(NamedTuple):
     scale: WindowScale
 
 
-def _run_windows(run_fn: RunFn, mosaic: Mosaic, params: InferenceParams, window_m: float) -> list[_WindowRun]:
-    """Run the network once on every non-blank window of `window_m` metres."""
-    height, width = mosaic.rgb.shape[:2]
-    windows = window_grid(height, width, mosaic.gsd_m, window_m, params.window_overlap)
+def _grid(mosaic: Mosaic, params: InferenceParams, window_m: float) -> list[Window]:
+    return window_grid(*mosaic.rgb.shape[:2], mosaic.gsd_m, window_m, params.window_overlap)
+
+
+def _run_windows(
+    run_fn: RunFn, mosaic: Mosaic, params: InferenceParams, window_m: float
+) -> Iterator[_WindowRun]:
+    """Run the network on every non-blank window of `window_m` metres, one window at a time."""
+    windows = _grid(mosaic, params, window_m)
     xs = sorted({w.x for w in windows})
     ys = sorted({w.y for w in windows})
     active = [w for w in windows if not is_blank(mosaic, w, params.min_valid_fraction)]
     active_xy = {(w.x, w.y) for w in active}
-    runs = []
     for w in active:
         batch, scale = preprocess_window(mosaic.rgb[w.y : w.y + w.height, w.x : w.x + w.width])
         cls, reg = run_fn(batch)
-        runs.append(_WindowRun(w, interior_sides(w, active_xy, xs, ys), cls, reg, batch.shape[2:], scale))
-    return runs
+        yield _WindowRun(w, interior_sides(w, active_xy, xs, ys), cls, reg, batch.shape[2:], scale)
 
 
 def _decode(run: _WindowRun, params: InferenceParams, class_index: int) -> Detections:
@@ -89,19 +92,6 @@ def _decode(run: _WindowRun, params: InferenceParams, class_index: int) -> Detec
     return window_to_mosaic(d, run.window, run.scale)
 
 
-def _trees(runs: Sequence[_WindowRun], params: InferenceParams) -> Detections:
-    parts = [drop_edge_boxes(_decode(r, params, 0), r.window, r.interior, params.edge_band) for r in runs]
-    return merge_window_detections(concat_detections(parts), params.iou_threshold)
-
-
-def _groups(runs: Sequence[_WindowRun], params: InferenceParams) -> Detections:
-    parts = []
-    for r in runs:
-        d = _decode(r, params, 1)
-        parts.append((d, cut_boxes(d, r.window, r.interior, params.edge_band)))
-    return merge_group_detections(parts, params.iou_threshold)
-
-
 def predict_mosaic_classes(
     run_fn: RunFn, mosaic: Mosaic, params: InferenceParams, class_indices: Sequence[int] | None = None
 ) -> list[Detections]:
@@ -109,30 +99,41 @@ def predict_mosaic_classes(
     pixels.
 
     Trees come from `window_m` windows with edge boxes dropped; tree_groups from `group_window_m` windows
-    with boxes cut by a window edge joined across windows. The network runs once per window per distinct
-    window grid.
+    with boxes cut by a window edge joined across windows. Each window is decoded as soon as it has run,
+    and a window grid both classes share runs once.
     """
-    runs: dict[tuple, list[_WindowRun]] = {}
+    if class_indices is not None and not set(class_indices) <= {0, 1}:
+        raise ValueError(f"class_index out of range in {list(class_indices)}: the classes are {CLASSES}")
+    trees: list[Detections] = []
+    groups: list[tuple[Detections, np.ndarray]] = []
+    seen_k = 1
 
-    def runs_for(window_m: float) -> list[_WindowRun]:
-        height, width = mosaic.rgb.shape[:2]
-        key = tuple(window_grid(height, width, mosaic.gsd_m, window_m, params.window_overlap))
-        if key not in runs:
-            runs[key] = _run_windows(run_fn, mosaic, params, window_m)
-        return runs[key]
+    def sweep(window_m: float, decode_classes) -> None:
+        nonlocal seen_k
+        for run in _run_windows(run_fn, mosaic, params, window_m):
+            seen_k = run.cls.shape[-1]
+            for c in decode_classes(seen_k):
+                d = _decode(run, params, c)
+                if c == 0:
+                    trees.append(drop_edge_boxes(d, run.window, run.interior, params.edge_band))
+                else:
+                    groups.append((d, cut_boxes(d, run.window, run.interior, params.edge_band)))
 
-    if class_indices is None:
-        first = runs_for(params.window_m)
-        class_indices = range(first[0].cls.shape[-1] if first else 1)
-    out = []
-    for c in class_indices:
-        if c == 0:
-            out.append(_trees(runs_for(params.window_m), params))
-        elif c == 1:
-            out.append(_groups(runs_for(params.group_window_m), params))
-        else:
-            raise ValueError(f"class_index {c} out of range: the classes are {CLASSES}")
-    return out
+    def wanted(k: int) -> list[int]:
+        return list(range(min(k, len(CLASSES)))) if class_indices is None else list(class_indices)
+
+    shared = _grid(mosaic, params, params.window_m) == _grid(mosaic, params, params.group_window_m)
+    tree_pass = class_indices is None or 0 in class_indices
+    if tree_pass:
+        sweep(params.window_m, lambda k: [c for c in wanted(k) if c == 0 or shared])
+    if 1 in wanted(seen_k) and not (tree_pass and shared):
+        sweep(params.group_window_m, lambda k: [1])
+    return [
+        merge_window_detections(concat_detections(trees), params.iou_threshold)
+        if c == 0
+        else merge_group_detections(groups, params.iou_threshold)
+        for c in wanted(seen_k)
+    ]
 
 
 def predict_mosaic(run_fn: RunFn, mosaic: Mosaic, params: InferenceParams) -> Detections:
@@ -141,8 +142,10 @@ def predict_mosaic(run_fn: RunFn, mosaic: Mosaic, params: InferenceParams) -> De
 
 
 def _window_count(mosaics: list[Mosaic], params: InferenceParams) -> int:
+    """Windows the tree and group grids would run, counted as if both run (the model's classes are not
+    known before the first window)."""
     return sum(
-        len(window_grid(*m.rgb.shape[:2], m.gsd_m, params.window_m, params.window_overlap)) for m in mosaics
+        len(_grid(m, params, params.window_m)) + len(_grid(m, params, params.group_window_m)) for m in mosaics
     )
 
 

@@ -77,6 +77,32 @@ def test_group_windows_run_once_per_distinct_size(write_oam_chip, fake_session):
         predict_mosaic_classes(ort_run_fn(s2), m, p, (1,))
 
 
+def test_small_group_window_counts_against_the_budget(write_oam_chip, fake_session, tmp_path):
+    write_oam_chip()
+    s = fake_session(num_classes=2)
+    with pytest.raises(ValueError, match="windows"):
+        predict_session(s, tmp_path, {"group_window_m": 5, "window_overlap": 0.9})
+    assert s.calls == []
+
+
+def test_window_outputs_are_decoded_as_they_come(write_oam_chip, fake_session):
+    import weakref
+
+    [m] = mosaic_chips([write_oam_chip(X0 + i, Y0 + j) for i in range(4) for j in range(4)])
+    run = ort_run_fn(fake_session(num_classes=2))
+    outputs, most_alive = [], 0
+
+    def tracking_run(batch):
+        nonlocal most_alive
+        most_alive = max(most_alive, sum(r() is not None for r in outputs))
+        cls, reg = run(batch)
+        outputs.append(weakref.ref(cls))
+        return cls, reg
+
+    predict_mosaic_classes(tracking_run, m, InferenceParams())
+    assert len(outputs) > 4 and most_alive <= 1
+
+
 def test_two_tile_groups_and_noise_files(write_oam_chip, fake_session, tmp_path, caplog):
     first = write_oam_chip(X0, Y0)
     write_oam_chip(X0 + 10, Y0)
