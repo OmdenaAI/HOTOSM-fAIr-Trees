@@ -3,9 +3,11 @@
 Only HOT ``train`` and ``validation`` are converted (as ``train`` and ``val``); HOT ``test`` stays out of
 training. A tree outside every ``tree_group`` with a known crown diameter becomes a label square of that
 side, centred on its point; one with an unknown diameter becomes a 4 m ignore square; trees inside a group
-get nothing, as the group itself is masked. A region carries every feature that touches its tiles, so a
-crown cut by a block edge is labelled on both sides. Labels come only from trees of the region's own split:
-a crown from another split that reaches into a region is masked there instead (HOT's split has no buffer).
+get nothing, as the group itself is a label (``label: 2``, a tree_group). A region carries every feature
+that touches its tiles, so a crown cut by a block edge is labelled on both sides. Labels come only from
+features of the region's own split (a group's split is that of the tile under its representative point):
+a crown or group from another split that reaches into a region is masked there instead (HOT's split has no
+buffer).
 """
 
 import json
@@ -23,6 +25,7 @@ from shapely.geometry import mapping
 
 from experiments.label_study.hot import UTM, HotData, known_diameter, split_units, write_tile
 from fair_trees.georef import parse_oam_name, tile_bounds_4326, true_gsd
+from fair_trees.params import CLASSES
 from fair_trees.preprocess import read_chip
 
 logger = logging.getLogger(__name__)
@@ -138,6 +141,7 @@ def _write_region(
         "zooms": sorted({int(z) for z in region.tiles["z"]}),
         "footprint": mapping(region.footprint),
         "valid_area_m2": valid_area_m2,
+        "classes": list(CLASSES),
     }
     _write_json(region_dir / "region.json", meta)
 
@@ -160,6 +164,14 @@ def _biomes(regions: list[_Region], biome_fn: Callable[[float, float], str] | No
     overall = sum(found.values(), Counter())
     fallback = overall.most_common(1)[0][0] if overall else "unknown"
     return {rid: counts.most_common(1)[0][0] if counts else fallback for rid, counts in found.items()}
+
+
+def _group_splits(groups: gpd.GeoDataFrame, tiles: gpd.GeoDataFrame) -> np.ndarray:
+    """Per group, the HOT split of the tile under its representative point (None off every tile)."""
+    points = gpd.GeoDataFrame(geometry=groups.geometry.representative_point(), crs=groups.crs)
+    under = points.sjoin(tiles[["split", "geometry"]].to_crs(groups.crs), predicate="intersects")
+    split = under[~under.index.duplicated()]["split"]  # a point on a tile edge: the first tile
+    return split.reindex(groups.index).to_numpy(dtype=object)
 
 
 def _label_free_share(tiles: gpd.GeoDataFrame, crowns: gpd.GeoDataFrame) -> dict[str, float]:
@@ -202,7 +214,8 @@ def convert(
         crowns["split"].to_numpy(),
     )
     group_shapes = groups.geometry.to_numpy()
-    labelled, unknown, other_split, masked_groups = set(), set(), set(), set()
+    group_split = _group_splits(groups, data.tiles)
+    labelled, unknown, other_split, group_labels, other_groups = set(), set(), set(), set(), set()
     for region, crown_idx, group_idx in zip(
         regions, _touching(crowns, regions), _touching(groups, regions), strict=True
     ):
@@ -210,14 +223,18 @@ def convert(
         is_own = tree_split[crown_idx] == region.hot_split
         label_idx, other_idx = crown_idx[is_known & is_own], crown_idx[is_known & ~is_own]
         unknown_idx = crown_idx[~is_known]
+        own_group = group_split[group_idx] == region.hot_split
+        own_group_idx, other_group_idx = group_idx[own_group], group_idx[~own_group]
         labelled.update(label_idx)
         unknown.update(unknown_idx)
         other_split.update(other_idx)
-        masked_groups.update(group_idx)
+        group_labels.update(own_group_idx)
+        other_groups.update(other_group_idx)
 
-        properties = {"label": 1, "source": SOURCE, "licence": LICENCE, "region": region.id}
-        labels = [_feature(g, properties) for g in squares[label_idx]]
-        ignore = [_feature(g, {"reason": "tree_group"}) for g in group_shapes[group_idx]]
+        properties = {"source": SOURCE, "licence": LICENCE, "region": region.id}
+        labels = [_feature(g, {"label": 1, **properties}) for g in squares[label_idx]]
+        labels += [_feature(g, {"label": 2, **properties}) for g in group_shapes[own_group_idx]]
+        ignore = [_feature(g, {"reason": "other_split_group"}) for g in group_shapes[other_group_idx]]
         ignore += [_feature(g, {"reason": "unknown_diameter"}) for g in squares[unknown_idx]]
         ignore += [_feature(g, {"reason": "other_split"}) for g in squares[other_idx]]
         _write_region(out_root, region, labels, ignore, area_m2[region.id], biomes[region.id])
@@ -239,7 +256,8 @@ def convert(
         "ignored_unknown_diameter": len(unknown),
         "masked_other_split": len(other_split),
         "trees_in_groups": int((in_group & data.trees["split"].isin(list(SPLITS)).to_numpy()).sum()),
-        "groups": len(masked_groups),
+        "group_labels": len(group_labels),
+        "groups_masked_other_split": len(other_groups),
         "label_free_tile_share": _label_free_share(data.tiles, crowns),
         # share of the valid ground area, as the NEON converter reports it
         "val_share": split_m2["val"] / total_m2 if total_m2 else 0.0,

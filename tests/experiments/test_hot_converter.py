@@ -38,7 +38,8 @@ TREES = {
     8: ("C", 0.03, 0.5, 6.0, "validation"),  # ~1.1 m from B: a val crown reaching into a train region
     9: ("D", 0.5, 0.5, 3.0, "test"),
 }
-GROUPS = {"C": (0.5, 0.5, 0.9, 0.9), "D": (0.2, 0.2, 0.4, 0.4)}  # fractions east0, south0, east1, south1
+# fractions east0, south0, east1, south1; B's group reaches 0.1 of a tile into C (a val region)
+GROUPS = {"C": (0.5, 0.5, 0.9, 0.9), "D": (0.2, 0.2, 0.4, 0.4), "B": (0.8, 0.35, 1.1, 0.45)}
 
 
 def tile_xy(name):
@@ -80,7 +81,7 @@ def hot_data():
         crs="EPSG:4326",
     )
     groups = gpd.GeoDataFrame(
-        {"osm_id": [100, 101]},
+        {"osm_id": [100, 101, 102]},
         geometry=[box(*at(n, f[0], f[3]), *at(n, f[2], f[1])) for n, f in GROUPS.items()],
         crs="EPSG:4326",
     )
@@ -165,7 +166,7 @@ def test_tree_box_is_a_ground_square_of_its_diameter(tmp_path):
 
 def test_box_crossing_a_block_edge_is_in_both_regions(tmp_path):
     out, _, _ = run(tmp_path)
-    (in_b,) = features(out, "B", "labels")  # tree 2's point is in A
+    (in_b,) = _by_label(features(out, "B", "labels"), 1)  # tree 2's point is in A
     assert in_b["properties"]["region"] == REGION["B"]
     assert_square(utm_shapes([in_b]).iloc[0], 2, 6.0)
     assert_square(square_for(features(out, "A", "labels"), 2), 2, 6.0)
@@ -187,25 +188,45 @@ def test_crown_from_another_split_is_masked_not_labelled(tmp_path):
     assert_square(square_for(features(out, "C", "labels"), 8), 8, 6.0)
 
 
+def _by_label(feats, label):
+    return [f for f in feats if f["properties"].get("label") == label]
+
+
 def test_tree_inside_a_group_gets_no_box_and_no_square(tmp_path):
     out, _, _ = run(tmp_path)
     tree = utm_point(6)
-    labels, ignore = features(out, "C", "labels"), features(out, "C", "ignore")
-    assert len(labels) == 2  # trees 7 and 8
-    assert utm_shapes(labels).distance(tree).min() > 1.0
-    (group,) = ignore
-    assert group["properties"] == {"reason": "tree_group"}
-    assert utm_shapes(ignore).iloc[0].contains(tree)
+    labels = features(out, "C", "labels")
+    trees = _by_label(labels, 1)
+    assert len(trees) == 2  # trees 7 and 8
+    assert utm_shapes(trees).distance(tree).min() > 1.0
+    (group,) = _by_label(labels, 2)
+    assert utm_shapes([group]).iloc[0].contains(tree)
 
 
-def test_groups_are_ignore_polygons(tmp_path):
+def test_own_split_group_is_a_label(tmp_path):
     out, _, _ = run(tmp_path)
-    (group,) = features(out, "C", "ignore")
-    assert group["geometry"]["type"] == "Polygon"
+    (group,) = _by_label(features(out, "C", "labels"), 2)
+    assert group["properties"] == {
+        "label": 2,
+        "source": "hot",
+        "licence": "CC-BY-4.0 imagery, ODbL-1.0 labels",
+        "region": REGION["C"],
+    }
     expected = hot_data().groups.geometry.iloc[0]
     assert shape(group["geometry"]).symmetric_difference(expected).area < 1e-12
+    assert len(_by_label(features(out, "B", "labels"), 2)) == 1  # B's own group
+    for n in "ABCE":
+        assert all(f["properties"].get("reason") != "tree_group" for f in features(out, n, "ignore"))
     # the test tile's group is never written
-    assert all(f["properties"]["reason"] != "tree_group" for n in "ABE" for f in features(out, n, "ignore"))
+    assert not any(_by_label(features(out, n, "labels"), 2) for n in "AE")
+
+
+def test_other_split_group_is_masked(tmp_path):
+    out, _, _ = run(tmp_path)
+    other = [f for f in features(out, "C", "ignore") if f["properties"] == {"reason": "other_split_group"}]
+    assert len(other) == 1
+    expected = hot_data().groups.geometry.iloc[2]
+    assert shape(other[0]["geometry"]).symmetric_difference(expected).area < 1e-12
 
 
 def test_region_json_and_stats(tmp_path):
@@ -217,7 +238,18 @@ def test_region_json_and_stats(tmp_path):
 
     out, stats, _ = run(tmp_path, biome_fn=biome_fn)
     meta = json.loads((out / REGION["C"] / "region.json").read_text())
-    assert set(meta) == {"id", "source", "biome", "licence", "split", "zooms", "footprint", "valid_area_m2"}
+    assert set(meta) == {
+        "id",
+        "source",
+        "biome",
+        "licence",
+        "split",
+        "zooms",
+        "footprint",
+        "valid_area_m2",
+        "classes",
+    }
+    assert meta["classes"] == ["tree", "tree_group"]
     assert meta["id"] == REGION["C"] and meta["split"] == "val" and meta["zooms"] == [20]
     assert meta["source"] == "hot" and meta["biome"] == "tropical"
     assert meta["licence"] == "CC-BY-4.0 imagery, ODbL-1.0 labels"
@@ -234,7 +266,8 @@ def test_region_json_and_stats(tmp_path):
     assert stats["ignored_unknown_diameter"] == 3
     assert stats["masked_other_split"] == 1
     assert stats["trees_in_groups"] == 1
-    assert stats["groups"] == 1
+    assert stats["group_labels"] == 2  # C's group in C, B's group in B
+    assert stats["groups_masked_other_split"] == 1  # B's group where it reaches into C
     assert stats["label_free_tile_share"] == {"train": pytest.approx(1 / 3), "val": 0.0}
     assert stats["val_share"] == pytest.approx(0.25, abs=1e-3)
 
