@@ -143,7 +143,8 @@ class SampleDataset(Dataset):
     def __getitem__(self, i: int) -> tuple[int, np.ndarray, tuple[int, int], np.ndarray]:
         if self._cache is None:
             self._cache = RegionCache(self.regions)
-        rgb, boxes = load_sample(self.specs[self.start + i], self._cache, self.cfg)
+        sample = load_sample(self.specs[self.start + i], self._cache, self.cfg)
+        rgb, boxes = sample.rgb, sample.boxes[sample.labels == 0]
         batch, scale = preprocess_window(rgb)
         boxes = boxes * np.array([scale.scale_x, scale.scale_y, scale.scale_x, scale.scale_y], np.float32)
         # a degenerate box makes the box coder's log(w) infinite
