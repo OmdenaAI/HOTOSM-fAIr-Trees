@@ -209,7 +209,7 @@ def evaluate_units(
     would otherwise widen a confident one.
     """
     low_params = dataclasses.replace(
-        params, confidence_threshold=min(decode_threshold, params.confidence_threshold)
+        params, confidence_threshold=min(decode_threshold, params.confidence_threshold), class_thresholds=()
     )
     masks = [
         np.asarray(u.ignore_mask, dtype=bool) if ignore and u.ignore_mask is not None else None for u in units

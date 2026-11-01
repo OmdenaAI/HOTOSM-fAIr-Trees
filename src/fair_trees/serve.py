@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -19,7 +20,15 @@ from fair_trees.decode import (
     window_to_mosaic,
 )
 from fair_trees.georef import mosaic_px_to_4326_rings
-from fair_trees.params import CLASSES, OUTPUT_NAMES, InferenceParams, parse_inference_params
+from fair_trees.params import (
+    CLASSES,
+    OUTPUT_NAMES,
+    THRESHOLDS_KEY,
+    InferenceParams,
+    caller_sets_threshold,
+    parse_class_thresholds,
+    parse_inference_params,
+)
 from fair_trees.postprocess import to_feature_collection
 from fair_trees.preprocess import (
     Mosaic,
@@ -85,7 +94,7 @@ def _decode(run: _WindowRun, params: InferenceParams, class_index: int) -> Detec
         run.reg,
         run.input_hw,
         (run.scale.resized_height, run.scale.resized_width),
-        params.confidence_threshold,
+        params.threshold(class_index),
         params.nms_threshold,
         class_index,
     )
@@ -161,6 +170,12 @@ def _window_count(mosaics: list[Mosaic], params: InferenceParams) -> int:
     )
 
 
+def _metadata(session) -> Mapping[str, str]:
+    """The ONNX model's custom metadata; empty for a session that exposes none."""
+    get = getattr(session, "get_modelmeta", None)
+    return dict(get().custom_metadata_map) if get is not None else {}
+
+
 def predict_session(
     session,
     input_images: Path,
@@ -168,8 +183,13 @@ def predict_session(
     bbox: tuple[float, float, float, float] | None = None,
 ) -> dict:
     """Predict crowns (class 1) and, for a two-class model, tree groups (class 2) for a chip file or
-    directory of chips and return a GeoJSON FeatureCollection."""
+    directory of chips and return a GeoJSON FeatureCollection.
+
+    Unless the caller names a confidence threshold, each class is served at the threshold the model's
+    fine-tune picked on val (ONNX metadata ``THRESHOLDS_KEY``), else at the default."""
     p = parse_inference_params(params)
+    if not caller_sets_threshold(params):
+        p = replace(p, class_thresholds=parse_class_thresholds(_metadata(session).get(THRESHOLDS_KEY)))
     input_images = Path(input_images)
     paths = [input_images] if input_images.is_file() else sorted(input_images.iterdir())
     skipped: list[tuple[str, str]] = []

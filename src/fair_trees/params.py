@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from collections.abc import Mapping, Sequence
@@ -24,6 +25,7 @@ GROUP_MERGE_RULES = ("join", "overlap", "drop_edge")  # see decode.merge_group_d
 
 INPUT_NAME = "images"
 OUTPUT_NAMES = ("cls_logits", "bbox_regression")
+THRESHOLDS_KEY = "fair_trees.confidence_thresholds"  # ONNX metadata: JSON {class name: val-picked threshold}
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,15 @@ class InferenceParams:
     min_valid_fraction: float = 0.2
     group_window_m: float = 120.0  # tree_group window; window_m is the tree window
     group_merge: str = "join"  # how group boxes cut by a window edge combine: one of GROUP_MERGE_RULES
+    # per class (CLASSES order), the model's own thresholds; a class not covered uses confidence_threshold.
+    # Set from the model's metadata by predict_session, never parsed from the caller's params.
+    class_thresholds: tuple[float, ...] = ()
+
+    def threshold(self, class_index: int) -> float:
+        """The decode threshold of a class."""
+        if class_index < len(self.class_thresholds):
+            return self.class_thresholds[class_index]
+        return self.confidence_threshold
 
 
 @dataclass(frozen=True)
@@ -179,10 +190,10 @@ def parse_split_params(hp: Mapping | None) -> SplitParams:
 def parse_inference_params(params: Mapping | None) -> InferenceParams:
     params = _as_mapping("inference params", params)
     aliases = {"confidence_threshold": ("score_thresh",), "nms_threshold": ("nms_thresh",)}
-    known = set(InferenceParams.__dataclass_fields__) | {a for v in aliases.values() for a in v}
-    _warn_unknown(params, known, "inference parameter")
+    fields = set(InferenceParams.__dataclass_fields__) - {"class_thresholds"}
+    _warn_unknown(params, fields | {a for v in aliases.values() for a in v}, "inference parameter")
     d = InferenceParams()
-    numbers = [name for name in InferenceParams.__dataclass_fields__ if name != "group_merge"]
+    numbers = sorted(fields - {"group_merge"})
     p = InferenceParams(
         **{name: _field(params, name, getattr(d, name), float, aliases.get(name, ())) for name in numbers},
         group_merge=params.get("group_merge") or d.group_merge,
@@ -196,6 +207,33 @@ def parse_inference_params(params: Mapping | None) -> InferenceParams:
     _in_range("edge_band", p.edge_band, 0, 0.5, hi_open=True)
     _in_range("min_valid_fraction", p.min_valid_fraction, 0, 1)
     return p
+
+
+def caller_sets_threshold(params: Mapping | None) -> bool:
+    """Whether the caller's inference params name a confidence threshold (canonical or alias)."""
+    return any((params or {}).get(k) is not None for k in ("confidence_threshold", "score_thresh"))
+
+
+def parse_class_thresholds(text: str | None) -> tuple[float, ...]:
+    """Per-class thresholds (CLASSES order) from a model's ``THRESHOLDS_KEY`` metadata; ``()`` when absent
+    or invalid (warned), so the model serves at ``confidence_threshold``. A class missing from the JSON
+    ends the tuple, and every class after it uses ``confidence_threshold`` too."""
+    if not text:
+        return ()
+    try:
+        picked = json.loads(text)
+        out = []
+        for name in CLASSES:
+            if name not in picked:
+                break
+            value = float(picked[name])
+            if not 0 <= value <= 1 or isinstance(picked[name], bool):
+                raise ValueError(f"{name}: {picked[name]!r} is not in [0, 1]")
+            out.append(value)
+    except (TypeError, ValueError) as e:  # json.JSONDecodeError is a ValueError
+        logger.warning(f"ignoring the model's confidence thresholds {text!r}: {e}")
+        return ()
+    return tuple(out)
 
 
 def _parse_crop_m(value: Any, default: tuple[float, float]) -> tuple[float, float]:

@@ -91,6 +91,12 @@ def test_decodes_below_a_low_operating_point(fake_session):
     assert r.units[0]["tp"] == 1
 
 
+def test_scoring_ignores_model_thresholds(run):
+    params = InferenceParams(confidence_threshold=0.5, class_thresholds=(0.999,))
+    r = evaluate_units(run, [_unit("u1", [[123, 123, 133, 133]])], params)
+    assert r.units[0]["tp"] == 1 and r.sweep[0]["f1"] == 1.0
+
+
 def test_pick_sweep_covers_the_pick_grid(run):
     r = evaluate_units(run, [_unit("u1", [[123, 123, 133, 133]])], PARAMS)
     assert [s["threshold"] for s in r.pick_sweep] == pytest.approx([0.1 + 0.025 * i for i in range(9)])
