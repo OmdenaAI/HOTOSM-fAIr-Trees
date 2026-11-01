@@ -46,7 +46,9 @@ class InferenceParams:
     edge_band: float = 0.05
     min_valid_fraction: float = 0.2
     group_window_m: float = 120.0  # tree_group window; window_m is the tree window
-    group_merge: str = "join"  # how group boxes cut by a window edge combine: one of GROUP_MERGE_RULES
+    # how group boxes cut by a window edge combine (GROUP_MERGE_RULES); drop_edge beat join by +0.08 group F1
+    # [0.06, 0.10] on HOT val
+    group_merge: str = "drop_edge"
     # per class (CLASSES order), the model's own thresholds; a class not covered uses confidence_threshold.
     # Set from the model's metadata by predict_session, never parsed from the caller's params.
     class_thresholds: tuple[float, ...] = ()

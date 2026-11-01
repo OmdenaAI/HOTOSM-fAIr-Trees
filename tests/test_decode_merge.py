@@ -64,7 +64,7 @@ def test_cut_boxes_are_the_ones_drop_edge_boxes_drops():
 def test_group_split_across_windows_is_joined():
     a = (_dets([[80, 10, 100, 30]], [0.5]), np.array([True]))
     b = (_dets([[95, 12, 130, 32]], [0.7]), np.array([True]))
-    m = merge_group_detections([a, b], 0.15)
+    m = merge_group_detections([a, b], 0.15, rule="join")
     np.testing.assert_allclose(m.boxes, [[80, 10, 130, 32]])
     np.testing.assert_allclose(m.scores, [0.7])
 
@@ -72,14 +72,14 @@ def test_group_split_across_windows_is_joined():
 def test_cut_group_joins_full_box_of_other_window():
     a = (_dets([[80, 10, 100, 30]], [0.5]), np.array([True]))
     b = (_dets([[60, 10, 130, 30], [300, 300, 340, 340]], [0.9, 0.4]), np.array([False, False]))
-    m = merge_group_detections([a, b], 0.15)
+    m = merge_group_detections([a, b], 0.15, rule="join")
     assert _as_set(m) == {(60.0, 10.0, 130.0, 30.0, 0.9), (300.0, 300.0, 340.0, 340.0, 0.4)}
 
 
 def test_separate_groups_stay_separate():
     a = (_dets([[0, 0, 10, 10], [12, 0, 20, 10]], [0.9, 0.8]), np.array([True, False]))
     b = (_dets([[50, 50, 60, 60]], [0.5]), np.array([True]))
-    m = merge_group_detections([a, b], 0.15)
+    m = merge_group_detections([a, b], 0.15, rule="join")
     assert len(m.scores) == 3  # a cut box only joins boxes of another window it overlaps
 
 
@@ -165,10 +165,10 @@ def test_drop_edge_rule_keeps_only_uncut_boxes():
     assert _as_set(m) == {(60.0, 10.0, 130.0, 30.0, 0.9), (0.0, 0.0, 20.0, 20.0, 0.3)}
 
 
-def test_join_is_the_default_rule():
-    a = (_dets([[0, 0, 60, 40]], [0.5]), np.array([True]))
+def test_drop_edge_is_the_default_rule():
+    a = (_dets([[0, 0, 60, 40], [200, 0, 220, 20]], [0.5, 0.4]), np.array([True, False]))
     b = (_dets([[55, 0, 100, 40]], [0.7]), np.array([True]))
-    assert _as_set(merge_group_detections([a, b], 0.15)) == {(0.0, 0.0, 100.0, 40.0, 0.7)}
+    assert _as_set(merge_group_detections([a, b], 0.15)) == {(200.0, 0.0, 220.0, 20.0, 0.4)}
 
 
 def test_unknown_rule_rejected():

@@ -92,7 +92,7 @@ def test_group_window_param():
 
 
 def test_group_merge_param():
-    assert InferenceParams().group_merge == "join"
+    assert InferenceParams().group_merge == "drop_edge"
     for rule in ("join", "overlap", "drop_edge"):
         assert parse_inference_params({"group_merge": rule}).group_merge == rule
     with pytest.raises(ValueError, match="group_merge"):

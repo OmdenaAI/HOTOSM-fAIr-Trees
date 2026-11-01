@@ -217,7 +217,7 @@ JOIN_MIN_OVERLAP = 0.5  # "overlap" rule: intersection over the smaller box's ar
 
 
 def merge_group_detections(
-    parts: Sequence[tuple[Detections, np.ndarray]], iou_threshold: float, rule: str = "join"
+    parts: Sequence[tuple[Detections, np.ndarray]], iou_threshold: float, rule: str = "drop_edge"
 ) -> Detections:
     """Join or drop tree_group boxes cut by window edges, then NMS.
 
