@@ -93,6 +93,19 @@ def test_multipolygon_split_into_parts(geo, origin):
     np.testing.assert_allclose(labels_to_boxes(fc, origin), [[0, 0, 10, 10], [50, 50, 70, 80]], atol=1e-6)
 
 
+def test_multipolygon_group_is_one_box(geo, origin):
+    # canopy minus the crowns inside can fall apart into pieces: still one group
+    a = geo.box_polygon((0, 0, 10, 10))["coordinates"]
+    b = geo.box_polygon((50, 50, 70, 80))["coordinates"]
+    feature = {
+        "type": "Feature",
+        "geometry": {"type": "MultiPolygon", "coordinates": [a, b]},
+        "properties": {"label": 2},
+    }
+    fc = {"type": "FeatureCollection", "features": [feature]}
+    np.testing.assert_allclose(labels_to_boxes(fc, origin, label=2), [[0, 0, 70, 80]], atol=1e-6)
+
+
 def test_altitude_is_dropped(geo, origin):
     poly = geo.box_polygon((10, 20, 60, 90))
     with_alt = {"type": "Polygon", "coordinates": [[[*p, 123.0] for p in poly["coordinates"][0]]]}
