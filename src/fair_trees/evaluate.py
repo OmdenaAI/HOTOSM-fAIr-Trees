@@ -116,6 +116,9 @@ def point_in_box_recall(points: np.ndarray, boxes: np.ndarray) -> float:
 SWEEP_THRESHOLDS = np.round(np.linspace(0.05, 0.95, 19), 2)
 AP_THRESHOLDS = np.linspace(0.01, 1.0, 101)
 DECODE_THRESHOLD = 0.01
+PICK_THRESHOLDS = np.round(np.linspace(0.1, 0.3, 9), 3)  # where a fine-tune picks its operating point
+MIN_PICK_GT = 200  # fewer val boxes of a class than this: the prior, not a pick
+PRIOR_THRESHOLD = {1: 0.15, 2: 0.2}  # by the model's class count: where HOT val F1 peaked for each
 
 
 @dataclass
@@ -143,6 +146,7 @@ class EvalReport:
     sweep: list[dict]
     units: list[dict]
     breakdown: dict
+    pick_sweep: list[dict] = field(default_factory=list)  # P/R/F1 at each of PICK_THRESHOLDS
 
     def to_dict(self) -> dict:
         """JSON-native view: python scalars, lists and str-keyed dicts only."""
@@ -161,6 +165,7 @@ class EvalReport:
             "breakdown": {
                 str(k): {str(v): dict(m) for v, m in vs.items()} for k, vs in self.breakdown.items()
             },
+            "pick_sweep": [dict(s) for s in self.pick_sweep],
         }
 
     def unit_counts(self) -> list[Counts]:
@@ -213,7 +218,9 @@ def evaluate_units(
         parts = [predict_group_parts(run_fn, u.mosaic, low_params) for u in units]
 
         def at(i: int, t: float) -> Detections:
-            dets = merge_group_detections(filter_group_parts(parts[i], t), params.iou_threshold)
+            dets = merge_group_detections(
+                filter_group_parts(parts[i], t), params.iou_threshold, params.group_merge
+            )
             return dets if masks[i] is None else _drop_ignored(dets, masks[i])
     else:
         decoded = []
@@ -246,10 +253,12 @@ def evaluate_units(
             bp, br, bf = prf(_sum(cs))
             breakdown[key][value] = {"precision": bp, "recall": br, "f1": bf, "n_units": len(cs)}
 
-    sweep = []
-    for t in thresholds:
-        sp, sr, sf = prf(_sum(_pooled(float(t))))
-        sweep.append({"threshold": float(t), "precision": sp, "recall": sr, "f1": sf})
+    def _row(t: float) -> dict:
+        sp, sr, sf = prf(_sum(_pooled(t)))
+        return {"threshold": t, "precision": sp, "recall": sr, "f1": sf}
+
+    sweep = [_row(float(t)) for t in thresholds]
+    pick_sweep = [_row(float(t)) for t in PICK_THRESHOLDS]
     if sweep:
         f1_max = max(s["f1"] for s in sweep)
         conf_at_max = min(s["threshold"] for s in sweep if s["f1"] == f1_max)
@@ -272,7 +281,27 @@ def evaluate_units(
         sweep=sweep,
         units=unit_rows,
         breakdown=breakdown,
+        pick_sweep=pick_sweep,
     )
+
+
+def pick_threshold(report: EvalReport, prior: float, *, min_gt: int = MIN_PICK_GT) -> float:
+    """The operating point a fine-tune serves at: the lowest of ``PICK_THRESHOLDS`` with the best pooled F1,
+    or ``prior`` when the report holds fewer than ``min_gt`` ground-truth boxes (a small val set's best
+    threshold is mostly noise)."""
+    n_gt = sum(u["tp"] + u["fn"] for u in report.units)
+    if n_gt < min_gt or not report.pick_sweep:
+        return float(prior)
+    best = max(s["f1"] for s in report.pick_sweep)
+    return min(s["threshold"] for s in report.pick_sweep if s["f1"] == best)
+
+
+def f1_at(report: EvalReport, threshold: float) -> dict:
+    """The pick-sweep row (threshold, precision, recall, f1) at ``threshold``; KeyError off the grid."""
+    for s in report.pick_sweep:
+        if abs(s["threshold"] - threshold) < 1e-9:
+            return s
+    raise KeyError(f"{threshold} is not one of the pick thresholds {list(PICK_THRESHOLDS)}")
 
 
 def region_units(

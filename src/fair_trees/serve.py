@@ -131,7 +131,7 @@ def predict_mosaic_classes(
     return [
         merge_window_detections(concat_detections(trees), params.iou_threshold)
         if c == 0
-        else merge_group_detections(groups, params.iou_threshold)
+        else merge_group_detections(groups, params.iou_threshold, params.group_merge)
         for c in wanted(seen_k)
     ]
 

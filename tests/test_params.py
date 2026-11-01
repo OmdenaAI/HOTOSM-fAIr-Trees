@@ -91,6 +91,14 @@ def test_group_window_param():
             parse_inference_params({"group_window_m": bad})
 
 
+def test_group_merge_param():
+    assert InferenceParams().group_merge == "join"
+    for rule in ("join", "overlap", "drop_edge"):
+        assert parse_inference_params({"group_merge": rule}).group_merge == rule
+    with pytest.raises(ValueError, match="group_merge"):
+        parse_inference_params({"group_merge": "glue"})
+
+
 def test_split_params():
     p = parse_split_params({"val_ratio": 0.3, "z_ref": 19, "block_size": 2})
     assert p == SplitParams(val_ratio=0.3, split_seed=42, block_size=2, z_ref=19)

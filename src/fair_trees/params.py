@@ -20,6 +20,7 @@ MAX_WINDOW_M = 200.0
 MAX_MOSAIC_PIXELS = 2**28  # 16384 x 16384 px, ~1 GiB of RGB + valid mask across one call's mosaics
 
 CLASSES = ("tree", "tree_group")  # head order; GeoJSON label and output class number = index + 1
+GROUP_MERGE_RULES = ("join", "overlap", "drop_edge")  # see decode.merge_group_detections
 
 INPUT_NAME = "images"
 OUTPUT_NAMES = ("cls_logits", "bbox_regression")
@@ -43,6 +44,7 @@ class InferenceParams:
     edge_band: float = 0.05
     min_valid_fraction: float = 0.2
     group_window_m: float = 120.0  # tree_group window; window_m is the tree window
+    group_merge: str = "join"  # how group boxes cut by a window edge combine: one of GROUP_MERGE_RULES
 
 
 @dataclass(frozen=True)
@@ -180,12 +182,12 @@ def parse_inference_params(params: Mapping | None) -> InferenceParams:
     known = set(InferenceParams.__dataclass_fields__) | {a for v in aliases.values() for a in v}
     _warn_unknown(params, known, "inference parameter")
     d = InferenceParams()
+    numbers = [name for name in InferenceParams.__dataclass_fields__ if name != "group_merge"]
     p = InferenceParams(
-        **{
-            name: _field(params, name, getattr(d, name), float, aliases.get(name, ()))
-            for name in InferenceParams.__dataclass_fields__
-        }
+        **{name: _field(params, name, getattr(d, name), float, aliases.get(name, ())) for name in numbers},
+        group_merge=params.get("group_merge") or d.group_merge,
     )
+    _require("group_merge", p.group_merge in GROUP_MERGE_RULES, f"one of {GROUP_MERGE_RULES}", p.group_merge)
     _in_range("window_m", p.window_m, 5, MAX_WINDOW_M)
     _in_range("group_window_m", p.group_window_m, 5, MAX_WINDOW_M)
     _in_range("window_overlap", p.window_overlap, 0, 0.9)
