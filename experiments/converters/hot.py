@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 SOURCE = "hot"
 LICENCE = "CC-BY-4.0 imagery, ODbL-1.0 labels"
 UNKNOWN_SIDE_M = 4.0
-SPLITS = {"train": "train", "validation": "val"}  # HOT split -> region split; HOT test is never converted
+SPLITS = {"train": "train", "validation": "val"}  # HOT split -> region split, for training
+TEST_SPLITS = {"test": "test"}  # HOT test on its own: a held-out benchmark part
 
 
 @dataclass(frozen=True)
@@ -56,9 +57,9 @@ def _tile_square(x: int, y: int, z: int) -> shapely.Geometry:
     return shapely.box(west, south, east, north)
 
 
-def _regions(tiles: gpd.GeoDataFrame, block_tiles: int) -> list[_Region]:
+def _regions(tiles: gpd.GeoDataFrame, block_tiles: int, splits: dict[str, str]) -> list[_Region]:
     regions = []
-    for hot_split, split in SPLITS.items():
+    for hot_split, split in splits.items():
         in_split = tiles[tiles["split"] == hot_split]
         position = pd.Index(in_split["tile_id"])
         for unit_id, tile_ids in split_units(in_split, split, block_tiles):
@@ -96,11 +97,14 @@ def _touching(features: gpd.GeoDataFrame, regions: list[_Region]) -> list[np.nda
 
 
 def _write_chips(
-    regions: list[_Region], images: Callable[[str], Iterable[tuple[str, bytes]]], out_root: Path
+    regions: list[_Region],
+    images: Callable[[str], Iterable[tuple[str, bytes]]],
+    out_root: Path,
+    splits: dict[str, str],
 ) -> dict[str, float]:
     """Write each streamed tile into its region's chips as it arrives; return valid ground m^2 per region."""
     area_m2 = {r.id: 0.0 for r in regions}
-    for hot_split in SPLITS:
+    for hot_split in splits:
         pending = {t: r.id for r in regions if r.hot_split == hot_split for t in r.tiles["tile_id"]}
         for tile_id, image in images(hot_split):
             region_id = pending.pop(tile_id, None)
@@ -128,6 +132,7 @@ def _write_region(
     ignore: list[dict],
     valid_area_m2: float,
     biome: str,
+    split: str,
 ) -> None:
     region_dir = out_root / region.id
     _write_json(region_dir / "labels.geojson", {"type": "FeatureCollection", "features": labels})
@@ -137,7 +142,7 @@ def _write_region(
         "source": SOURCE,
         "biome": biome,
         "licence": LICENCE,
-        "split": SPLITS[region.hot_split],
+        "split": split,
         "zooms": sorted({int(z) for z in region.tiles["z"]}),
         "footprint": mapping(region.footprint),
         "valid_area_m2": valid_area_m2,
@@ -174,10 +179,12 @@ def _group_splits(groups: gpd.GeoDataFrame, tiles: gpd.GeoDataFrame) -> np.ndarr
     return split.reindex(groups.index).to_numpy(dtype=object)
 
 
-def _label_free_share(tiles: gpd.GeoDataFrame, crowns: gpd.GeoDataFrame) -> dict[str, float]:
+def _label_free_share(
+    tiles: gpd.GeoDataFrame, crowns: gpd.GeoDataFrame, splits: dict[str, str]
+) -> dict[str, float]:
     """Per split, the share of tiles that no label square of that split touches."""
     shares = {}
-    for hot_split, split in SPLITS.items():
+    for hot_split, split in splits.items():
         in_split = tiles[tiles["split"] == hot_split]
         labels = crowns[crowns["known"] & (crowns["split"] == hot_split)]
         touched = np.unique(labels.sindex.query(in_split.geometry, predicate="intersects")[0])
@@ -192,20 +199,23 @@ def convert(
     *,
     biome_fn: Callable[[float, float], str] | None = None,
     block_tiles: int = 16,
+    splits: dict[str, str] = SPLITS,
 ) -> dict:
     """Write a region per block component and ``stats.json`` into an empty ``out_root``; return the stats.
 
     ``images(hot_split)`` yields ``(tile_id, image_bytes)`` for every tile of a HOT split; each tile is
-    written as it arrives, so the images are never all in memory.
+    written as it arrives, so the images are never all in memory. ``splits`` maps the HOT splits to
+    convert to their region split (``TEST_SPLITS`` for the held-out test part); crowns and groups of any
+    other split that reach into a region are masked there.
     """
     out_root = Path(out_root)
     if out_root.exists() and any(out_root.iterdir()):
         raise ValueError(f"{out_root}: output directory is not empty; old regions would mix with new ones")
 
-    regions = _regions(data.tiles, block_tiles)
+    regions = _regions(data.tiles, block_tiles, splits)
     crowns, in_group = _crowns(data)
     groups = data.groups.to_crs("EPSG:4326")
-    area_m2 = _write_chips(regions, images, out_root)
+    area_m2 = _write_chips(regions, images, out_root, splits)
     biomes = _biomes(regions, biome_fn)
 
     squares, known, tree_split = (
@@ -237,13 +247,14 @@ def convert(
         ignore = [_feature(g, {"reason": "other_split_group"}) for g in group_shapes[other_group_idx]]
         ignore += [_feature(g, {"reason": "unknown_diameter"}) for g in squares[unknown_idx]]
         ignore += [_feature(g, {"reason": "other_split"}) for g in squares[other_idx]]
-        _write_region(out_root, region, labels, ignore, area_m2[region.id], biomes[region.id])
+        split = splits[region.hot_split]
+        _write_region(out_root, region, labels, ignore, area_m2[region.id], biomes[region.id], split)
 
-    split_m2 = dict.fromkeys(SPLITS.values(), 0.0)
-    regions_per_split = dict.fromkeys(SPLITS.values(), 0)
-    chips_per_split = dict.fromkeys(SPLITS.values(), 0)
+    split_m2 = dict.fromkeys(splits.values(), 0.0)
+    regions_per_split = dict.fromkeys(splits.values(), 0)
+    chips_per_split = dict.fromkeys(splits.values(), 0)
     for region in regions:
-        split = SPLITS[region.hot_split]
+        split = splits[region.hot_split]
         split_m2[split] += area_m2[region.id]
         regions_per_split[split] += 1
         chips_per_split[split] += len(region.tiles)
@@ -255,12 +266,12 @@ def convert(
         "boxes": len(labelled),
         "ignored_unknown_diameter": len(unknown),
         "masked_other_split": len(other_split),
-        "trees_in_groups": int((in_group & data.trees["split"].isin(list(SPLITS)).to_numpy()).sum()),
+        "trees_in_groups": int((in_group & data.trees["split"].isin(list(splits)).to_numpy()).sum()),
         "group_labels": len(group_labels),
         "groups_masked_other_split": len(other_groups),
-        "label_free_tile_share": _label_free_share(data.tiles, crowns),
+        "label_free_tile_share": _label_free_share(data.tiles, crowns, splits),
         # share of the valid ground area, as the NEON converter reports it
-        "val_share": split_m2["val"] / total_m2 if total_m2 else 0.0,
+        "val_share": split_m2.get("val", 0.0) / total_m2 if total_m2 else 0.0,
     }
     out_root.mkdir(parents=True, exist_ok=True)
     (out_root / "stats.json").write_text(json.dumps(stats, indent=2, sort_keys=True))
