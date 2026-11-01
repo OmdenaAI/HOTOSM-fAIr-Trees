@@ -52,6 +52,8 @@ REQUIRED = {
         "run.evaluate",
         "run.export",
         "run.compare_runs",
+        "picked=True",
+        "run.compare_group_merges",
         "flush_and_unmount",
     ],
     "colab_convert_oamtcd.ipynb": [
