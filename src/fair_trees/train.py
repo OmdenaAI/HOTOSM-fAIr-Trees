@@ -39,7 +39,7 @@ from fair_trees.dataset import (
     sampler_stats,
     total_chips,
 )
-from fair_trees.evaluate import EvalUnit, evaluate_units, region_units
+from fair_trees.evaluate import PRIOR_THRESHOLD, EvalUnit, evaluate_units, pick_threshold, region_units
 from fair_trees.params import CLASSES, InferenceParams, TrainParams, parse_train_params
 from fair_trees.preprocess import preprocess_window
 from fair_trees.serve import RunFn
@@ -409,6 +409,15 @@ class TrainResult:
     best_metrics: dict
     history: list[dict]
 
+    @property
+    def thresholds(self) -> dict[str, float]:
+        """The best epoch's val-picked operating threshold per class (what ``thresholds.json`` holds)."""
+        return _thresholds(self.best_metrics)
+
+
+def _thresholds(metrics: Mapping) -> dict[str, float]:
+    return {c: float(metrics[f"val/threshold_{c}"]) for c in CLASSES if f"val/threshold_{c}" in metrics}
+
 
 def _fresh_sums() -> dict:
     return {"cls": 0.0, "reg": 0.0, "l2sp": 0.0, "batches": 0}
@@ -454,10 +463,14 @@ def _validate(
     the equal-weight means over them (with ``f1_max_<source>`` / ``ap40_<source>`` for trees and
     ``f1_max_<source>_tree_group`` / ``ap40_<source>_tree_group`` for groups alongside when there are
     several), so neither a large source nor one class drowns out the rest in early stopping.
+    ``threshold_<class>`` is the operating threshold picked on val (``pick_threshold``, the mean over
+    sources), with the prior for a model of that many classes.
     """
     t0 = time.monotonic()
     run_fn = torch_run_fn(model, device)
+    prior = PRIOR_THRESHOLD[len(units)]
     reports = {}
+    picks: dict[str, list[float]] = {}
     for name, class_units in units.items():
         by_source: dict[str, list[EvalUnit]] = {}
         for u in class_units:
@@ -465,9 +478,11 @@ def _validate(
         for s, us in sorted(by_source.items()):
             key = s if name == "tree" else f"{s}_{name}"
             reports[key] = evaluate_units(run_fn, us, params, class_index=CLASSES.index(name))
+            picks.setdefault(name, []).append(pick_threshold(reports[key], prior))
     model.train()
     keys = ("f1_max", "conf_at_max", "ap40", "aoi_f1")
     metrics = {k: float(np.mean([getattr(r, k) for r in reports.values()])) for k in keys}
+    metrics |= {f"threshold_{name}": float(np.mean(ts)) for name, ts in picks.items()}
     if len(reports) > 1:
         for key, r in reports.items():
             # not "f1_max/<source>": MLflow's file store cannot hold "f1_max" as both a file and a folder
@@ -486,14 +501,15 @@ def _load_scaler_state(scaler: torch.amp.GradScaler, state: Mapping) -> None:
 
 
 def _supersede(out_dir: Path) -> Path:
-    """Move an earlier run's checkpoints, best.pt and metrics.csv into `superseded-<n>`; delete nothing."""
+    """Move an earlier run's checkpoints, best.pt, metrics.csv and thresholds.json into `superseded-<n>`."""
     n = 0
     while (out_dir / f"superseded-{n}").exists():
         n += 1
     dest = out_dir / f"superseded-{n}"
     dest.mkdir()
     old = [path for _, path in _checkpoints(out_dir)]
-    old += [out_dir / name for name in ("best.pt", "metrics.csv") if (out_dir / name).exists()]
+    names = ("best.pt", "metrics.csv", "thresholds.json")
+    old += [out_dir / name for name in names if (out_dir / name).exists()]
     for path in old:
         os.replace(path, dest / path.name)
     logger.warning(f"force=True with resume=False: moved the earlier run's {len(old)} files to {dest}")
@@ -697,6 +713,10 @@ def train(
             s.patience_left = cfg.patience
             s.best_metrics = dict(metrics)
             save_file(model.state_dict(), out_dir, "best.pt", tmp_dir=tmp_dir, keep_last=None)
+            if thresholds := _thresholds(s.best_metrics):
+                part = out_dir / "thresholds.json.part"
+                part.write_text(json.dumps(thresholds, indent=2))
+                os.replace(part, out_dir / "thresholds.json")
         else:
             s.patience_left -= 1
 
