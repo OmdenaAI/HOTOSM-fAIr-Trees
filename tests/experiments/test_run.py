@@ -261,6 +261,50 @@ def test_evaluate_adds_val_group_for_k2(monkeypatch, setup, write_region, fake_s
     assert "val_group_merged" not in out["parts"]
 
 
+def _k2_tree_and_group(fake_session):
+    return fake_session({(_p3(50, 50), 0): 5.0, (_p3(50, 50), 1): 5.0}, num_classes=2)
+
+
+def test_evaluate_picks_thresholds_on_val(monkeypatch, setup, write_region, fake_session):
+    data, drive, _, bench = setup
+    _group_region(write_region, data)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(_k2_tree_and_group(fake_session)))
+    out = run.evaluate("r1", bench, drive_root=drive, data_root=data)
+    parts = out["parts"]
+    # a handful of val boxes: the two-class prior, for every part of each class
+    assert out["thresholds"] == {"tree": 0.2, "tree_group": 0.2} and out["threshold_source"] == "val"
+    for name in ("val", "val_group", "neon"):
+        assert parts[name]["picked_threshold"] == 0.2
+        assert {"f1_picked", "precision_picked", "recall_picked"} <= set(parts[name])
+    assert json.loads((drive / "runs" / "r1" / "thresholds.json").read_text()) == out["thresholds"]
+
+    (drive / "runs" / "r1" / "thresholds.json").write_text(json.dumps({"tree": 0.125, "tree_group": 0.3}))
+    out = run.evaluate("r1", bench, drive_root=drive, data_root=data)
+    assert out["thresholds"] == {"tree": 0.125, "tree_group": 0.3} and out["threshold_source"] == "training"
+    assert out["parts"]["val"]["picked_threshold"] == 0.125
+
+
+def test_evaluate_reports_trees_inside_groups(monkeypatch, setup, write_region, fake_session):
+    data, drive, _, bench = setup
+    _group_region(write_region, data)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(_k2_tree_and_group(fake_session)))
+    report = run.evaluate("r1", bench, drive_root=drive, data_root=data)["parts"]["val_in_group"]
+    assert report["tree_boxes"] == 2  # one per val tile
+    assert report["share_in_served_groups"] == 1.0 and report["share_in_gt_groups"] == 0.5
+    assert set(report) >= {"f1", "f1_dropping_in_group", "tp_lost", "paired_diff", "thresholds"}
+
+
+def test_compare_group_merges(monkeypatch, setup, write_region, fake_session):
+    data, drive, _, bench = setup
+    _group_region(write_region, data)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(_k2_tree_and_group(fake_session)))
+    out = run.compare_group_merges("r1", drive_root=drive, data_root=data)
+    assert set(out["rules"]) == {"join", "overlap", "drop_edge"}
+    assert out["rules"]["join"]["paired_diff_vs_join"] == [0.0, 0.0, 0.0]
+    assert {"f1", "f1_max", "ap40", "threshold"} <= set(out["rules"]["drop_edge"])
+    assert json.loads((drive / "runs" / "r1" / "group_merge.json").read_text()) == out
+
+
 def test_evaluate_adds_merged_baseline_for_k1(monkeypatch, setup, write_region, fake_session):
     data, drive, _, bench = setup
     _group_region(write_region, data)
@@ -434,6 +478,23 @@ def test_compare_runs_pairs_two_named_parts(tmp_path):
     )
     assert (r["f1_a"], r["f1_b"], r["paired_diff"][0]) == (0.0, 1.0, 1.0)
     assert (r["part_a"], r["part_b"]) == ("val_group_merged", "val_group")
+
+
+def test_compare_runs_at_each_runs_picked_threshold(tmp_path):
+    for run_id, picked, counts in (("k1", 0.15, [[3, 1, 0]]), ("k2", 0.2, [[2, 0, 1]])):
+        _fake_run(tmp_path, run_id, [("p0", "s0")], [(0, 9, 9)])
+        path = tmp_path / "runs" / run_id / "eval.json"
+        doc = json.loads(path.read_text())
+        doc["parts"]["val"] |= {
+            "picked_threshold": picked,
+            "pick_sweep": [
+                {"threshold": t, "units": counts if t == picked else [[0, 0, 0]]} for t in (0.15, 0.2)
+            ],
+        }
+        path.write_text(json.dumps(doc))
+    r = run.compare_runs("k1", "k2", drive_root=tmp_path, picked=True)
+    assert (r["f1_a"], r["f1_b"]) == (pytest.approx(6 / 7), pytest.approx(4 / 5))
+    assert r["paired_diff"][0] == pytest.approx(4 / 5 - 6 / 7) and r["picked"] == (0.15, 0.2)
 
 
 def test_compare_runs(tmp_path):

@@ -200,9 +200,13 @@ def evaluate_units(
     ignore: bool = True,
     decode_threshold: float = DECODE_THRESHOLD,
     class_index: int = 0,
+    group_parts: Sequence[list[tuple[Detections, np.ndarray]]] | None = None,
 ) -> EvalReport:
     """Decode each unit's class ``class_index`` once at a low threshold, then score at the operating point
-    and a sweep.
+    and a sweep (the pick sweep with per-unit counts, so runs can be paired at their picked thresholds).
+
+    ``group_parts`` (per unit, ``predict_group_parts`` at ``DECODE_THRESHOLD``) skips the group decode, so
+    one decode can be scored under several ``group_merge`` rules.
 
     Trees are filtered after the cross-window merge (greedy NMS keeps the same boxes either way). Groups are
     filtered per window before their cross-window join, as serving filters them, since a low-score cut box
@@ -215,7 +219,9 @@ def evaluate_units(
         np.asarray(u.ignore_mask, dtype=bool) if ignore and u.ignore_mask is not None else None for u in units
     ]
     if class_index == 1:
-        parts = [predict_group_parts(run_fn, u.mosaic, low_params) for u in units]
+        if group_parts is None:
+            group_parts = [predict_group_parts(run_fn, u.mosaic, low_params) for u in units]
+        parts = group_parts
 
         def at(i: int, t: float) -> Detections:
             dets = merge_group_detections(
@@ -253,12 +259,14 @@ def evaluate_units(
             bp, br, bf = prf(_sum(cs))
             breakdown[key][value] = {"precision": bp, "recall": br, "f1": bf, "n_units": len(cs)}
 
-    def _row(t: float) -> dict:
-        sp, sr, sf = prf(_sum(_pooled(t)))
-        return {"threshold": t, "precision": sp, "recall": sr, "f1": sf}
+    def _row(t: float, per_unit: bool = False) -> dict:
+        counts = _pooled(t)
+        sp, sr, sf = prf(_sum(counts))
+        row = {"threshold": t, "precision": sp, "recall": sr, "f1": sf}
+        return row | {"units": [[c.tp, c.fp, c.fn] for c in counts]} if per_unit else row
 
     sweep = [_row(float(t)) for t in thresholds]
-    pick_sweep = [_row(float(t)) for t in PICK_THRESHOLDS]
+    pick_sweep = [_row(float(t), per_unit=True) for t in PICK_THRESHOLDS]
     if sweep:
         f1_max = max(s["f1"] for s in sweep)
         conf_at_max = min(s["threshold"] for s in sweep if s["f1"] == f1_max)

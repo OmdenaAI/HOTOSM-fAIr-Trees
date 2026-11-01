@@ -364,10 +364,13 @@ def evaluate(
 ) -> dict:
     """Score a run on its val regions and on the frozen benchmark parts that are staged; writes ``eval.json``.
 
-    NEON eval-plot parts carry the forgetting bound; region parts are report-only.
+    NEON eval-plot parts carry the forgetting bound; region parts are report-only. Every part also reports
+    P/R/F1 at its class's operating threshold (``*_picked``): the run's ``thresholds.json`` when training
+    wrote one, else picked here on val and written there. A two-class model adds ``val_in_group``.
     """
     from experiments.neon_eval import DF_COMPAT
     from fair_trees.evaluate import evaluate_regions, evaluate_units
+    from fair_trees.export import checkpoint_thresholds
     from fair_trees.params import InferenceParams
 
     out_dir = Path(drive_root) / "runs" / run_id
@@ -382,33 +385,177 @@ def evaluate(
     _, val = _regions(conf, data_root)
     params = val_params(conf)
     zooms = conf["val"]["zooms"]
-    report = evaluate_regions(run_fn, val, params, zooms=zooms)
-    parts = {"val": _with_ci(report) | {"window_m": params.window_m}}
+    reports = {"val": evaluate_regions(run_fn, val, params, zooms=zooms)}
+    parts = {"val": _with_ci(reports["val"]) | {"window_m": params.window_m}}
     two_classes = _num_classes(run_fn) == 2
     if any("tree_group" in r.classes for r in val):
         if two_classes:
-            report = evaluate_regions(run_fn, val, params, zooms=zooms, label=2)
-            parts["val_group"] = _with_ci(report) | {"window_m": params.group_window_m}
+            reports["val_group"] = evaluate_regions(run_fn, val, params, zooms=zooms, label=2)
+            parts["val_group"] = _with_ci(reports["val_group"]) | {"window_m": params.group_window_m}
         else:
             parts["val_group_merged"] = _merged_groups(run_fn, val, params, zooms)
     for name, part, units, group_units in _benchmark_parts(benchmark, data_root):
         if part["kind"] == "regions":  # report-only: no forgetting bound
             part_params = InferenceParams(window_m=part["window_m"], group_window_m=params.group_window_m)
-            report = evaluate_units(run_fn, units, part_params)
-            parts[name] = _with_ci(report) | {"window_m": part["window_m"]}
+            reports[name] = evaluate_units(run_fn, units, part_params)
+            parts[name] = _with_ci(reports[name]) | {"window_m": part["window_m"]}
             if two_classes and group_units:
-                report = evaluate_units(run_fn, group_units, part_params, class_index=1)
-                parts[f"{name}_group"] = _with_ci(report) | {"window_m": params.group_window_m}
+                key = f"{name}_group"
+                reports[key] = evaluate_units(run_fn, group_units, part_params, class_index=1)
+                parts[key] = _with_ci(reports[key]) | {"window_m": params.group_window_m}
             continue
-        report = evaluate_units(run_fn, units, DF_COMPAT, ignore=False)
+        reports[name] = evaluate_units(run_fn, units, DF_COMPAT, ignore=False)
         lower = float(part["release_f1_ci95"][0])
-        parts[name] = _with_ci(report) | {
+        parts[name] = _with_ci(reports[name]) | {
             "forgetting_lower_bound": lower,
-            "forgetting_pass": report.f1 >= lower,
+            "forgetting_pass": reports[name].f1 >= lower,
         }
 
-    result = {"run_id": run_id, "weights": str(weights), "parts": parts}
+    thresholds = checkpoint_thresholds(out_dir / "best.pt")
+    source = "training" if thresholds else "val"
+    if not thresholds:
+        thresholds = _val_thresholds(reports, 2 if two_classes else 1)
+        _write_json(out_dir / "thresholds.json", thresholds)
+    for name, report in reports.items():
+        if (t := thresholds.get("tree_group" if name.endswith("_group") else "tree")) is not None:
+            parts[name] |= _at_picked(report, t)
+    if two_classes and "val_group" in reports and "tree_group" in thresholds:
+        parts["val_in_group"] = _in_group(run_fn, val, params, zooms, thresholds)
+
+    result = {
+        "run_id": run_id,
+        "weights": str(weights),
+        "thresholds": thresholds,
+        "threshold_source": source,
+        "parts": parts,
+    }
     _write_json(out_dir / "eval.json", result)
+    return result
+
+
+def _val_thresholds(reports: Mapping, num_classes: int) -> dict[str, float]:
+    """Per class, the operating threshold picked on its val part (the prior for this many classes when val
+    is small)."""
+    from fair_trees.evaluate import PRIOR_THRESHOLD, pick_threshold
+
+    prior = PRIOR_THRESHOLD[num_classes]
+    out = {"tree": pick_threshold(reports["val"], prior)}
+    if num_classes == 2:  # val without group labels: the prior
+        out["tree_group"] = pick_threshold(reports["val_group"], prior) if "val_group" in reports else prior
+    return out
+
+
+def _at_picked(report, threshold: float) -> dict:
+    """P/R/F1 at the pick-grid point nearest ``threshold`` (a mean over sources can fall between points)."""
+    row = min(report.pick_sweep, key=lambda s: abs(s["threshold"] - threshold))
+    return {
+        "picked_threshold": row["threshold"],
+        "precision_picked": row["precision"],
+        "recall_picked": row["recall"],
+        "f1_picked": row["f1"],
+    }
+
+
+def _in_group(
+    run_fn: "RunFn", regions: Sequence, params: "InferenceParams", zooms: Sequence[int], thresholds: Mapping
+) -> dict:
+    """Served tree boxes (at the picked thresholds) whose centre lies in a ground-truth group box or in a
+    served group box, and tree F1 if those in served groups were dropped. Tree scoring is the usual one:
+    boxes centred in a ground-truth group polygon or ignore mask are not scored."""
+    import numpy as np
+
+    from fair_trees.decode import Detections, centres_inside
+    from fair_trees.evaluate import (
+        Counts,
+        _drop_ignored,
+        count_matches,
+        paired_bootstrap_diff,
+        prf,
+        region_units,
+    )
+    from fair_trees.serve import predict_mosaic_classes
+
+    served = dataclasses.replace(params, class_thresholds=(thresholds["tree"], thresholds["tree_group"]))
+    gt_groups = {u.unit_id: u.gt_boxes for u in region_units(regions, zooms=zooms, label=2)}
+    n = in_gt = in_served = 0
+    kept_counts, dropped_counts = [], []
+    for u in region_units(regions, zooms=zooms):
+        trees, groups = predict_mosaic_classes(run_fn, u.mosaic, served)
+        n += len(trees.scores)
+        in_gt += int(centres_inside(trees.boxes, gt_groups.get(u.unit_id, np.zeros((0, 4)))).sum())
+        in_served += int(centres_inside(trees.boxes, groups.boxes).sum())
+        scored = trees if u.ignore_mask is None else _drop_ignored(trees, u.ignore_mask)
+        outside = ~centres_inside(scored.boxes, groups.boxes)
+        kept_counts.append(count_matches(scored.boxes, u.gt_boxes))
+        dropped = Detections(scored.boxes[outside], scored.scores[outside])
+        dropped_counts.append(count_matches(dropped.boxes, u.gt_boxes))
+    kept, dropped = sum(kept_counts, Counts(0, 0, 0)), sum(dropped_counts, Counts(0, 0, 0))
+    return {
+        "thresholds": dict(thresholds),
+        "tree_boxes": n,
+        "share_in_gt_groups": in_gt / n if n else 0.0,
+        "share_in_served_groups": in_served / n if n else 0.0,
+        "f1": prf(kept)[2],
+        "f1_dropping_in_group": prf(dropped)[2],
+        "tp_lost": kept.tp - dropped.tp,
+        "paired_diff": list(paired_bootstrap_diff(dropped_counts, kept_counts)),
+    }
+
+
+def compare_group_merges(
+    run_id: str,
+    *,
+    drive_root: Path = DRIVE_ROOT,
+    data_root: Path = DATA_ROOT,
+    config: Path | None = None,
+    weights: Path | None = None,
+    device: str | None = None,
+) -> dict:
+    """Val tree_group scores under each ``group_merge`` rule from one decode, at the run's group threshold
+    (``thresholds.json``, else the configured one), each paired against ``join``; writes ``group_merge.json``.
+    """
+    from fair_trees.evaluate import DECODE_THRESHOLD, evaluate_units, paired_bootstrap_diff, region_units
+    from fair_trees.export import checkpoint_thresholds
+    from fair_trees.params import GROUP_MERGE_RULES
+    from fair_trees.serve import predict_group_parts
+
+    out_dir = Path(drive_root) / "runs" / run_id
+    conf = load_config(config) if config is not None else _stored_config(out_dir / "config.json")
+    run_fn = _run_fn(Path(weights) if weights is not None else out_dir / "best.pt", device)
+    _, val = _regions(conf, data_root)
+    params = val_params(conf)
+    threshold = (checkpoint_thresholds(out_dir / "best.pt") or {}).get(
+        "tree_group", params.confidence_threshold
+    )
+    units = region_units(val, zooms=conf["val"]["zooms"], label=2)
+    low = dataclasses.replace(params, confidence_threshold=DECODE_THRESHOLD)
+    group_parts = [predict_group_parts(run_fn, u.mosaic, low) for u in units]
+    reports = {
+        rule: evaluate_units(
+            run_fn,
+            units,
+            dataclasses.replace(params, confidence_threshold=threshold, group_merge=rule),
+            class_index=1,
+            group_parts=group_parts,
+        )
+        for rule in GROUP_MERGE_RULES
+    }
+    join = reports["join"].unit_counts()
+    rules = {
+        rule: {
+            "threshold": threshold,
+            "f1": r.f1,
+            "precision": r.precision,
+            "recall": r.recall,
+            "f1_max": r.f1_max,
+            "conf_at_max": r.conf_at_max,
+            "ap40": r.ap40,
+            "paired_diff_vs_join": list(paired_bootstrap_diff(r.unit_counts(), join)),
+        }
+        for rule, r in reports.items()
+    }
+    result = {"run_id": run_id, "units": len(units), "rules": rules}
+    _write_json(out_dir / "group_merge.json", result)
     return result
 
 
@@ -420,7 +567,7 @@ def export(
     import onnxruntime
     import torch
 
-    from fair_trees.export import export_onnx_bytes
+    from fair_trees.export import checkpoint_thresholds, export_onnx_bytes
     from fair_trees.preprocess import preprocess_window
     from fair_trees.serve import ort_run_fn
     from fair_trees.train import build_model, torch_run_fn
@@ -436,7 +583,7 @@ def export(
         )
 
     model = build_model(out_dir / "best.pt", trainable_layers=0)  # one or two classes, as trained
-    data = export_onnx_bytes(model)
+    data = export_onnx_bytes(model, thresholds=checkpoint_thresholds(out_dir / "best.pt"))
     (out_dir / "model.onnx").write_bytes(data)
 
     torch_run = torch_run_fn(model, torch.device("cpu"))
@@ -484,16 +631,31 @@ def _equal_over(a: Mapping | None, b: Mapping | None, epochs: Sequence[str], col
     return all(a[e][column] == b[e][column] for e in epochs)
 
 
+def _picked_counts(part: Mapping) -> dict:
+    """Per unit id, the counts at the part's picked threshold (its pick-sweep row)."""
+    from fair_trees.evaluate import Counts
+
+    [row] = [s for s in part["pick_sweep"] if s["threshold"] == part["picked_threshold"]]
+    return {u["unit_id"]: Counts(*c) for u, c in zip(part["units"], row["units"], strict=True)}
+
+
 def compare_runs(
-    a: str, b: str, *, drive_root: Path = DRIVE_ROOT, part_a: str = "val", part_b: str | None = None
+    a: str,
+    b: str,
+    *,
+    drive_root: Path = DRIVE_ROOT,
+    part_a: str = "val",
+    part_b: str | None = None,
+    picked: bool = False,
 ) -> dict:
     """Sampler digests over the common epochs and the F1 of part ``part_b`` of run ``b`` against part
     ``part_a`` of run ``a`` (default: both ``val``), paired over their units.
 
     Two different parts (e.g. ``val_group`` against ``val_group_merged``) may use different windows; the
-    same part must use the same one.
+    same part must use the same one. With ``picked`` each run is scored at its own picked threshold
+    (``evaluate``'s ``picked_threshold``) instead of the shared operating point.
     """
-    from fair_trees.evaluate import paired_bootstrap_diff
+    from fair_trees.evaluate import Counts, bootstrap_ci, paired_bootstrap_diff, prf
 
     part_b = part_b or part_a
     dir_a, dir_b = Path(drive_root) / "runs" / a, Path(drive_root) / "runs" / b
@@ -501,7 +663,14 @@ def compare_runs(
     epochs = sorted(set(dig_a) & set(dig_b), key=int) if dig_a is not None and dig_b is not None else []
 
     val_a, val_b = _eval_part(dir_a, part_a), _eval_part(dir_b, part_b)
-    counts_a, counts_b = _unit_counts(val_a), _unit_counts(val_b)
+    counts_of = _picked_counts if picked else _unit_counts
+    counts_a, counts_b = counts_of(val_a), counts_of(val_b)
+    if picked:
+        val_a = val_a | {
+            "f1": prf(sum(counts_a.values(), Counts(0, 0, 0)))[2],
+            "f1_ci95": list(bootstrap_ci(list(counts_a.values()))),
+        }
+        val_b = val_b | {"f1": prf(sum(counts_b.values(), Counts(0, 0, 0)))[2]}
     if set(counts_a) != set(counts_b):
         raise ValueError(f"runs {a} and {b} were evaluated on different val units")
     window_a, window_b = (v.get("window_m", DEFAULT_VAL["window_m"]) for v in (val_a, val_b))
@@ -525,7 +694,7 @@ def compare_runs(
         "a_f1_ci95": a_ci,
         "b_f1_in_a_ci": a_ci[0] <= f1_b <= a_ci[1],
         "paired_diff": list(paired_bootstrap_diff([counts_b[i] for i in ids], [counts_a[i] for i in ids])),
-    }
+    } | ({"picked": (val_a["picked_threshold"], val_b["picked_threshold"])} if picked else {})
 
 
 def cli(argv: Sequence[str] | None = None) -> None:

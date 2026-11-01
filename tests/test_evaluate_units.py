@@ -100,8 +100,18 @@ def test_scoring_ignores_model_thresholds(run):
 def test_pick_sweep_covers_the_pick_grid(run):
     r = evaluate_units(run, [_unit("u1", [[123, 123, 133, 133]])], PARAMS)
     assert [s["threshold"] for s in r.pick_sweep] == pytest.approx([0.1 + 0.025 * i for i in range(9)])
-    assert all(s["f1"] == 1.0 for s in r.pick_sweep)
+    assert all(s["f1"] == 1.0 and s["units"] == [[1, 0, 0]] for s in r.pick_sweep)
     assert r.to_dict()["pick_sweep"] == r.pick_sweep
+
+
+def test_given_group_parts_are_scored_without_decoding(fake_session):
+    from fair_trees.decode import Detections
+
+    box = np.array([[120, 120, 136, 136]], np.float32)
+    parts = [[(Detections(box, np.array([0.9], np.float32)), np.array([False]))]]
+    session = fake_session(num_classes=2)
+    r = evaluate_units(ort_run_fn(session), [_unit("u1", box)], PARAMS, class_index=1, group_parts=parts)
+    assert r.units[0]["tp"] == 1 and session.calls == []
 
 
 def _report(f1s, n_gt):
