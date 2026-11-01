@@ -52,6 +52,7 @@ CKPT_PATTERN = re.compile(r"^ckpt-e(\d{3})-s(\d{6})\.pt$")
 CLS_WEIGHT = "head.classification_head.cls_logits.weight"
 CLS_BIAS = "head.classification_head.cls_logits.bias"
 NUM_ANCHORS = 9  # 3 sizes x 3 aspect ratios per location
+GROUP_CROP_M = (30.0, 120.0)  # a two-class fine-tune's default crops: up to the 120 m group window
 
 
 def checkpoint_num_classes(state: Mapping[str, torch.Tensor]) -> int:
@@ -772,15 +773,23 @@ def fine_tune(
 
     Without explicit `zoom_weights`, every zoom present in the train chips gets weight 1, so a z18 or z22
     dataset is never filtered out by the base-training defaults. Unless given, the manifest hash covers
-    the chip files, their split and the labels, so a resume on changed data is refused.
+    the chip files, their split and the labels, so a resume on changed data is refused. A two-class
+    fine-tune without explicit `augment.crop_m` crops up to the group window (`GROUP_CROP_M`).
     """
     train_kwargs.setdefault("manifest_hash", fair_data_hash(train_chips, val_chips, labels_path))
+    hp = hyperparameters or {}
     cfg = parse_train_params(hyperparameters)
     train_regions = load_fair_dataset(train_chips, labels_path, split="train")
     val_regions = load_fair_dataset(val_chips, labels_path, split="val")
-    if (hyperparameters or {}).get("zoom_weights") is None:
+    if hp.get("zoom_weights") is None:
         zooms = sorted({z for r in train_regions for z in r.chips})
         cfg = dataclasses.replace(cfg, zoom_weights={z: 1.0 for z in zooms})
+    two_classes = cfg.num_classes == 2 or (
+        cfg.num_classes is None
+        and checkpoint_num_classes(torch.load(weights, map_location="cpu", weights_only=True)) == 2
+    )
+    if two_classes and (hp.get("augment") or {}).get("crop_m") is None:
+        cfg = dataclasses.replace(cfg, augment=dataclasses.replace(cfg.augment, crop_m=GROUP_CROP_M))
     return train(
         cfg,
         train_regions,

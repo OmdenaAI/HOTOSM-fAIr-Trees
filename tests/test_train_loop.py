@@ -231,6 +231,26 @@ def test_fine_tune_keeps_k1_unless_asked(monkeypatch, write_oam_chip, geo, weigh
         assert T.checkpoint_num_classes(state) == k
 
 
+def test_two_class_fine_tune_crops_wide_enough_for_groups(
+    monkeypatch, write_oam_chip, geo, weights, tmp_path
+):
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(2)]
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps(geo.feature_collection([geo.box_polygon((5, 5, 15, 15))])))
+    seen = []
+    monkeypatch.setattr(T, "train", lambda cfg, *a, **k: seen.append(cfg.augment.crop_m))
+    k2 = tmp_path / "k2.pt"
+    torch.save(T.build_model(None, trainable_layers=0, num_classes=2).state_dict(), k2)
+    for hp, start in (
+        ({}, weights),
+        ({"num_classes": 2}, weights),
+        ({}, k2),
+        ({"num_classes": 2, "augment": {"crop_m": [30, 60]}}, weights),
+    ):
+        T.fine_tune(chips[:1], chips[1:], labels, hp, weights=start, out_dir=tmp_path / "ft")
+    assert seen == [(30.0, 80.0), (30.0, 120.0), (30.0, 120.0), (30.0, 60.0)]
+
+
 def test_two_classes_without_group_labels_are_refused(monkeypatch, regions, weights, tmp_path):
     script = Script([0.1])
     cfg = dataclasses.replace(CFG, num_classes=2)
