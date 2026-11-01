@@ -285,6 +285,15 @@ def filter_score(dets: Detections, threshold: float) -> Detections:
     return Detections(dets.boxes[keep], dets.scores[keep])
 
 
+def centres_inside(boxes: np.ndarray, regions: np.ndarray) -> np.ndarray:
+    """(N,) bool: whether each xyxy box's centre lies inside any of the xyxy regions, edges inclusive."""
+    b = np.asarray(boxes, np.float64).reshape(-1, 4)
+    r = np.asarray(regions, np.float64).reshape(-1, 4)
+    cx, cy = (b[:, None, 0] + b[:, None, 2]) / 2, (b[:, None, 1] + b[:, None, 3]) / 2
+    inside = (cx >= r[None, :, 0]) & (cx <= r[None, :, 2]) & (cy >= r[None, :, 1]) & (cy <= r[None, :, 3])
+    return inside.any(axis=1)
+
+
 def concat_detections(parts: Sequence[Detections]) -> Detections:
     if not parts:
         return Detections.empty()

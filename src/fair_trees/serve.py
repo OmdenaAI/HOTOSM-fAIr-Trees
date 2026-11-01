@@ -10,6 +10,7 @@ import numpy as np
 
 from fair_trees.decode import (
     Detections,
+    centres_inside,
     concat_detections,
     cut_boxes,
     decode_retinanet_output,
@@ -213,11 +214,21 @@ def predict_session(
     rings: list = []
     scores: list = []
     classes: list = []
+    in_group: list = []  # a two-class model's trees: whether a served group box covers the centre
     for m in mosaics:
-        for c, d in enumerate(predict_mosaic_classes(run, m, p)):
+        per_class = predict_mosaic_classes(run, m, p)
+        for c, d in enumerate(per_class):
             rings.extend(mosaic_px_to_4326_rings(d.boxes, m))
             scores.extend(d.scores)
             classes.extend([c + 1] * len(d.scores))
+            if c == 0 and len(per_class) > 1:
+                in_group.extend(centres_inside(d.boxes, per_class[1].boxes).tolist())
+            else:
+                in_group.extend([None] * len(d.scores))
     return to_feature_collection(
-        rings, np.asarray(scores, np.float32), bbox=bbox, classes=np.asarray(classes, np.int64)
+        rings,
+        np.asarray(scores, np.float32),
+        bbox=bbox,
+        classes=np.asarray(classes, np.int64),
+        in_group=in_group,
     )

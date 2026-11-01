@@ -94,6 +94,28 @@ def test_model_without_or_with_bad_thresholds_serves_at_the_default(
     assert _classes(predict_session(s, tmp_path, {})) == [2]
 
 
+def test_trees_centred_in_a_served_group_are_tagged(write_oam_chip, fake_session, tmp_path):
+    write_oam_chip()
+    fc = predict_session(_k2_with_thresholds(fake_session, None), tmp_path, {})
+    tags = {f["properties"]["class"]: f["properties"].get("in_group") for f in fc["features"]}
+    assert tags == {1: True, 2: None}  # the planted group box covers the planted tree's centre
+    s = _k2_with_thresholds(fake_session, {"tree": 0.5, "tree_group": 0.99})
+    [tree] = predict_session(s, tmp_path, {})["features"]
+    assert tree["properties"]["in_group"] is False  # no group served at its threshold
+    [k1] = predict_session(fake_session({CENTRE_ANCHOR_800: 5.0}), tmp_path, {})["features"]
+    assert "in_group" not in k1["properties"]
+
+
+def test_centres_inside():
+    from fair_trees.decode import centres_inside
+
+    trees = np.array([[0, 0, 10, 10], [20, 20, 30, 30], [50, 50, 54, 54]], np.float32)
+    groups = np.array([[0, 0, 25, 25], [52, 52, 60, 60]], np.float32)
+    assert centres_inside(trees, groups).tolist() == [True, True, True]
+    assert centres_inside(trees, groups[:1]).tolist() == [True, True, False]
+    assert centres_inside(trees, np.zeros((0, 4), np.float32)).tolist() == [False, False, False]
+
+
 def test_k2_session_without_groups_gives_trees_only(write_oam_chip, fake_session, tmp_path):
     write_oam_chip()
     fc = predict_session(fake_session({CENTRE_ANCHOR_800: 5.0}, num_classes=2), tmp_path, {})
