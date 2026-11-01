@@ -411,11 +411,12 @@ def evaluate(
             "forgetting_pass": reports[name].f1 >= lower,
         }
 
-    thresholds = checkpoint_thresholds(out_dir / "best.pt")
+    thresholds = checkpoint_thresholds(weights)  # the scored weights' own, whichever run they came from
     source = "training" if thresholds else "val"
     if not thresholds:
         thresholds = _val_thresholds(reports, 2 if two_classes else 1)
-        _write_json(out_dir / "thresholds.json", thresholds)
+        if weights == out_dir / "best.pt":  # what run.export bakes into this run's model.onnx
+            _write_json(out_dir / "thresholds.json", thresholds)
     for name, report in reports.items():
         if (t := thresholds.get("tree_group" if name.endswith("_group") else "tree")) is not None:
             parts[name] |= _at_picked(report, t)
@@ -521,12 +522,11 @@ def compare_group_merges(
 
     out_dir = Path(drive_root) / "runs" / run_id
     conf = load_config(config) if config is not None else _stored_config(out_dir / "config.json")
-    run_fn = _run_fn(Path(weights) if weights is not None else out_dir / "best.pt", device)
+    weights = Path(weights) if weights is not None else out_dir / "best.pt"
+    run_fn = _run_fn(weights, device)
     _, val = _regions(conf, data_root)
     params = val_params(conf)
-    threshold = (checkpoint_thresholds(out_dir / "best.pt") or {}).get(
-        "tree_group", params.confidence_threshold
-    )
+    threshold = (checkpoint_thresholds(weights) or {}).get("tree_group", params.confidence_threshold)
     units = region_units(val, zooms=conf["val"]["zooms"], label=2)
     low = dataclasses.replace(params, confidence_threshold=DECODE_THRESHOLD)
     group_parts = [predict_group_parts(run_fn, u.mosaic, low) for u in units]
@@ -632,10 +632,13 @@ def _equal_over(a: Mapping | None, b: Mapping | None, epochs: Sequence[str], col
 
 
 def _picked_counts(part: Mapping) -> dict:
-    """Per unit id, the counts at the part's picked threshold (its pick-sweep row)."""
+    """Per unit id, the counts at the part's picked threshold (its pick-sweep row); a part without a pick
+    sweep (the crown-merge baseline, an eval.json from before picking) keeps its operating point."""
     from fair_trees.evaluate import Counts
 
-    [row] = [s for s in part["pick_sweep"] if s["threshold"] == part["picked_threshold"]]
+    if "picked_threshold" not in part:
+        return _unit_counts(part)
+    [row] = [s for s in part["pick_sweep"] if abs(s["threshold"] - part["picked_threshold"]) < 1e-9]
     return {u["unit_id"]: Counts(*c) for u, c in zip(part["units"], row["units"], strict=True)}
 
 
@@ -694,7 +697,7 @@ def compare_runs(
         "a_f1_ci95": a_ci,
         "b_f1_in_a_ci": a_ci[0] <= f1_b <= a_ci[1],
         "paired_diff": list(paired_bootstrap_diff([counts_b[i] for i in ids], [counts_a[i] for i in ids])),
-    } | ({"picked": (val_a["picked_threshold"], val_b["picked_threshold"])} if picked else {})
+    } | ({"picked": (val_a.get("picked_threshold"), val_b.get("picked_threshold"))} if picked else {})
 
 
 def cli(argv: Sequence[str] | None = None) -> None:

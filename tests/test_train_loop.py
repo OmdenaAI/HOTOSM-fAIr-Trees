@@ -329,8 +329,9 @@ def _stub_reports(monkeypatch, by_source):
         calls.append([u.meta["source"] for u in units])
         source = units[0].meta["source"]
         f1, ap = by_source.get((source, class_index)) or by_source[source]
-        pick_sweep = [{"threshold": 0.25, "f1": f1}] if source == "big" else []
-        rows = [{"tp": 300, "fn": 0}] if source == "big" else []
+        picks = {"big": 0.25, "big2": 0.25, "mid": 0.225}  # sources with enough boxes to pick
+        pick_sweep = [{"threshold": picks[source], "f1": f1}] if source in picks else []
+        rows = [{"tp": 300, "fn": 0}] if source in picks else []
         return SimpleNamespace(
             f1_max=f1, conf_at_max=0.3, ap40=ap, aoi_f1=f1, units=rows, pick_sweep=pick_sweep
         )
@@ -388,6 +389,16 @@ def test_validate_picks_a_threshold_per_class(monkeypatch):
 
     # trees: a pick (0.25) from the large source and the two-class prior (0.2) from the small one, averaged
     assert v["threshold_tree"] == pytest.approx(0.225) and v["threshold_tree_group"] == 0.2
+
+
+def test_validate_snaps_the_mean_pick_to_the_grid(monkeypatch):
+    _stub_reports(monkeypatch, {"big": (0.6, 0.5), "big2": (0.6, 0.5), "mid": (0.6, 0.5)})
+    units = {"tree": _units("big", "big2", "mid")}
+
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    # mean(0.25, 0.25, 0.225) = 0.2417: served, exported and reported at the nearest grid point
+    assert v["threshold_tree"] == 0.25
 
 
 def test_best_epoch_thresholds_are_saved(monkeypatch, regions, weights, tmp_path):

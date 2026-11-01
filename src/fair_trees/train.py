@@ -39,7 +39,14 @@ from fair_trees.dataset import (
     sampler_stats,
     total_chips,
 )
-from fair_trees.evaluate import PRIOR_THRESHOLD, EvalUnit, evaluate_units, pick_threshold, region_units
+from fair_trees.evaluate import (
+    PICK_THRESHOLDS,
+    PRIOR_THRESHOLD,
+    EvalUnit,
+    evaluate_units,
+    pick_threshold,
+    region_units,
+)
 from fair_trees.params import CLASSES, InferenceParams, TrainParams, parse_train_params
 from fair_trees.preprocess import preprocess_window
 from fair_trees.serve import RunFn
@@ -464,8 +471,8 @@ def _validate(
     the equal-weight means over them (with ``f1_max_<source>`` / ``ap40_<source>`` for trees and
     ``f1_max_<source>_tree_group`` / ``ap40_<source>_tree_group`` for groups alongside when there are
     several), so neither a large source nor one class drowns out the rest in early stopping.
-    ``threshold_<class>`` is the operating threshold picked on val (``pick_threshold``, the mean over
-    sources), with the prior for a model of that many classes.
+    ``threshold_<class>`` is the operating threshold picked on val (``pick_threshold``; the mean over
+    sources, snapped to ``PICK_THRESHOLDS``), with the prior for a model of that many classes.
     """
     t0 = time.monotonic()
     run_fn = torch_run_fn(model, device)
@@ -483,7 +490,10 @@ def _validate(
     model.train()
     keys = ("f1_max", "conf_at_max", "ap40", "aoi_f1")
     metrics = {k: float(np.mean([getattr(r, k) for r in reports.values()])) for k in keys}
-    metrics |= {f"threshold_{name}": float(np.mean(ts)) for name, ts in picks.items()}
+    grid = np.asarray(PICK_THRESHOLDS)  # a mean over sources snaps back to the grid every report uses
+    metrics |= {
+        f"threshold_{name}": float(grid[np.abs(grid - np.mean(ts)).argmin()]) for name, ts in picks.items()
+    }
     if len(reports) > 1:
         for key, r in reports.items():
             # not "f1_max/<source>": MLflow's file store cannot hold "f1_max" as both a file and a folder

@@ -284,6 +284,21 @@ def test_evaluate_picks_thresholds_on_val(monkeypatch, setup, write_region, fake
     assert out["parts"]["val"]["picked_threshold"] == 0.125
 
 
+def test_evaluating_other_weights_keeps_the_runs_thresholds(monkeypatch, setup, write_region, fake_session):
+    data, drive, _, bench = setup
+    _group_region(write_region, data)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(_k2_tree_and_group(fake_session)))
+    other = drive / "runs" / "other"
+    other.mkdir(parents=True)
+    (other / "best.pt").write_bytes(b"x")
+    out = run.evaluate("r1", bench, drive_root=drive, data_root=data, weights=other / "best.pt")
+    assert out["threshold_source"] == "val" and not (drive / "runs" / "r1" / "thresholds.json").exists()
+
+    (other / "thresholds.json").write_text(json.dumps({"tree": 0.125, "tree_group": 0.3}))
+    out = run.evaluate("r1", bench, drive_root=drive, data_root=data, weights=other / "best.pt")
+    assert out["thresholds"] == {"tree": 0.125, "tree_group": 0.3} and out["threshold_source"] == "training"
+
+
 def test_evaluate_reports_trees_inside_groups(monkeypatch, setup, write_region, fake_session):
     data, drive, _, bench = setup
     _group_region(write_region, data)
@@ -495,6 +510,18 @@ def test_compare_runs_at_each_runs_picked_threshold(tmp_path):
     r = run.compare_runs("k1", "k2", drive_root=tmp_path, picked=True)
     assert (r["f1_a"], r["f1_b"]) == (pytest.approx(6 / 7), pytest.approx(4 / 5))
     assert r["paired_diff"][0] == pytest.approx(4 / 5 - 6 / 7) and r["picked"] == (0.15, 0.2)
+
+    # a part without a pick sweep (the crown-merge baseline) stays at its own operating point
+    path = tmp_path / "runs" / "k1" / "eval.json"
+    path.write_text(json.dumps({"parts": {"val_group_merged": json.loads(path.read_text())["parts"]["val"]}}))
+    doc = json.loads(path.read_text())
+    for key in ("picked_threshold", "pick_sweep"):
+        del doc["parts"]["val_group_merged"][key]
+    path.write_text(json.dumps(doc))
+    r = run.compare_runs(
+        "k1", "k2", drive_root=tmp_path, part_a="val_group_merged", part_b="val", picked=True
+    )
+    assert r["f1_a"] == 0.0 and r["f1_b"] == pytest.approx(4 / 5) and r["picked"] == (None, 0.2)
 
 
 def test_compare_runs(tmp_path):
