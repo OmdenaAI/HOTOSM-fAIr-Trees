@@ -59,6 +59,10 @@ F1 is at the 0.1 operating point; F1 @picked at the threshold picked per class o
 | hot-platform-joint0.3 | neon | 0.738 | 0.280 | 0.406 [0.372, 0.438] | 0.311 | 0.377 | 194 | 0.277 @0.15 |
 | hot-platform-joint0.3 | val | 0.521 | 0.583 | 0.550 [0.506, 0.596] | 0.458 | 0.551 | 30 | 0.572 @0.15 |
 | hot-platform-joint0.3 | val_group_merged | 0.083 | 0.001 | 0.001 [0.000, 0.004] | – | 0.001 | 30 | – |
+| hot-platform-joint0.3-newdata | hot-test | 0.329 | 0.623 | 0.430 [0.404, 0.455] | 0.436 | 0.432 | 35 | 0.554 @0.2 |
+| hot-platform-joint0.3-newdata | neon | 0.715 | 0.279 | 0.402 [0.372, 0.433] | 0.307 | 0.376 | 194 | 0.182 @0.2 |
+| hot-platform-joint0.3-newdata | val | 0.407 | 0.635 | 0.496 [0.458, 0.535] | 0.477 | 0.505 | 30 | 0.579 @0.2 |
+| hot-platform-joint0.3-newdata | val_group_merged | 0.125 | 0.002 | 0.003 [0.000, 0.006] | – | 0.003 | 30 | – |
 | hot-platform-joint0.3-wise-0.4 | neon | 0.768 | 0.561 | 0.648 [0.623, 0.672] | 0.521 | 0.637 | 194 | – |
 | hot-platform-joint0.3-wise-0.4 | val | 0.353 | 0.569 | 0.435 [0.387, 0.484] | 0.343 | 0.451 | 30 | – |
 | hot-platform-joint0.3-wise-0.5 | neon | 0.779 | 0.539 | 0.637 [0.611, 0.662] | 0.505 | 0.624 | 194 | – |
