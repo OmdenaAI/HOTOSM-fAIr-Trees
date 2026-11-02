@@ -231,9 +231,11 @@ def test_fine_tune_keeps_k1_unless_asked(monkeypatch, write_oam_chip, geo, weigh
         assert T.checkpoint_num_classes(state) == k
 
 
-def test_two_class_fine_tune_crops_wide_enough_for_groups(
+def test_fine_tune_crops_up_to_80_m_for_one_or_two_classes(
     monkeypatch, write_oam_chip, geo, weights, tmp_path
 ):
+    # 120 m crops for a two-class model cost 0.017 tree F1 on held-out HOT test against 80 m
+    # (paired [+0.008, +0.026]) for -0.01 to -0.02 group F1, so both class counts keep the 80 m default.
     chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(2)]
     labels = tmp_path / "labels.geojson"
     labels.write_text(json.dumps(geo.feature_collection([geo.box_polygon((5, 5, 15, 15))])))
@@ -248,7 +250,7 @@ def test_two_class_fine_tune_crops_wide_enough_for_groups(
         ({"num_classes": 2, "augment": {"crop_m": [30, 60]}}, weights),
     ):
         T.fine_tune(chips[:1], chips[1:], labels, hp, weights=start, out_dir=tmp_path / "ft")
-    assert seen == [(30.0, 80.0), (30.0, 120.0), (30.0, 120.0), (30.0, 60.0)]
+    assert seen == [(30.0, 80.0), (30.0, 80.0), (30.0, 80.0), (30.0, 60.0)]
 
 
 def test_two_classes_without_group_labels_are_refused(monkeypatch, regions, weights, tmp_path):
