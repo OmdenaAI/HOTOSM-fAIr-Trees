@@ -361,13 +361,18 @@ def evaluate(
     config: Path | None = None,
     weights: Path | None = None,
     device: str | None = None,
+    window_m: float | None = None,
 ) -> dict:
     """Score a run on its val regions and on the frozen benchmark parts that are staged; writes ``eval.json``.
 
     NEON eval-plot parts carry the forgetting bound; region parts are report-only. Every part also reports
     P/R/F1 at its class's operating threshold (``*_picked``): the run's ``thresholds.json`` when training
     wrote one, else picked here on val and written there. A two-class model adds ``val_in_group``.
+    ``window_m`` replaces the tree window of val and of the region parts, e.g. to score outside weights at
+    the scale they were trained at.
     """
+    import dataclasses
+
     from experiments.neon_eval import DF_COMPAT
     from fair_trees.evaluate import evaluate_regions, evaluate_units
     from fair_trees.export import checkpoint_thresholds
@@ -384,6 +389,8 @@ def evaluate(
 
     _, val = _regions(conf, data_root)
     params = val_params(conf)
+    if window_m is not None:
+        params = dataclasses.replace(params, window_m=float(window_m))
     zooms = conf["val"]["zooms"]
     reports = {"val": evaluate_regions(run_fn, val, params, zooms=zooms)}
     parts = {"val": _with_ci(reports["val"]) | {"window_m": params.window_m}}
@@ -396,9 +403,10 @@ def evaluate(
             parts["val_group_merged"] = _merged_groups(run_fn, val, params, zooms)
     for name, part, units, group_units in _benchmark_parts(benchmark, data_root):
         if part["kind"] == "regions":  # report-only: no forgetting bound
-            part_params = InferenceParams(window_m=part["window_m"], group_window_m=params.group_window_m)
+            part_window = float(window_m if window_m is not None else part["window_m"])
+            part_params = InferenceParams(window_m=part_window, group_window_m=params.group_window_m)
             reports[name] = evaluate_units(run_fn, units, part_params)
-            parts[name] = _with_ci(reports[name]) | {"window_m": part["window_m"]}
+            parts[name] = _with_ci(reports[name]) | {"window_m": part_window}
             if two_classes and group_units:
                 key = f"{name}_group"
                 reports[key] = evaluate_units(run_fn, group_units, part_params, class_index=1)

@@ -404,6 +404,20 @@ def test_evaluate_scores_a_regions_part(monkeypatch, setup, write_region, fake_s
     assert [u["unit_id"] for u in part["units"]] == ["t1"]
 
 
+def test_evaluate_window_overrides_val_and_region_parts(monkeypatch, setup, write_region, fake_session):
+    data, drive, _, bench = setup
+    oamtcd = data / "oamtcd"
+    write_region(
+        "t1", tiles=((8, 0),), root=oamtcd, source="oamtcd", split="test", boxes_px=[(2100, 30, 2130, 60)]
+    )
+    _add_regions_part(bench)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+
+    parts = run.evaluate("r1", bench, drive_root=drive, data_root=data, window_m=60.0)["parts"]
+
+    assert parts["val"]["window_m"] == 60.0 and parts["oamtcd"]["window_m"] == 60.0
+
+
 def test_evaluate_scores_groups_of_a_regions_part_for_k2(monkeypatch, setup, write_region, fake_session):
     from fair_trees.params import CLASSES
 
