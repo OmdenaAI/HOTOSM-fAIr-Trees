@@ -407,6 +407,19 @@ def test_evaluate_scores_a_regions_part(monkeypatch, setup, write_region, fake_s
     assert [u["unit_id"] for u in part["units"]] == ["t1"]
 
 
+def test_recall_check_scores_a_run_at_its_picked_threshold(monkeypatch, setup, fake_session):
+    from experiments.recall_check import run_recall_check
+
+    data, drive, _, bench = setup
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+    (drive / "runs" / "r1" / "thresholds.json").write_text(json.dumps({"tree": 0.125}))
+    out = run_recall_check("r1", drive_root=drive, data_root=data, benchmark=bench)
+    assert out["threshold"] == 0.125 and out["part"] == "val" and set(out["scales"]) >= {"0.8", "1.0"}
+    assert json.loads((drive / "runs" / "r1" / "recall_check_val.json").read_text()) == out
+    with pytest.raises(ValueError, match="hot-test"):
+        run_recall_check("r1", part="hot-test", drive_root=drive, data_root=data, benchmark=bench)
+
+
 def test_evaluate_window_overrides_val_and_region_parts(monkeypatch, setup, write_region, fake_session):
     data, drive, _, bench = setup
     oamtcd = data / "oamtcd"

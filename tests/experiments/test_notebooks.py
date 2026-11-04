@@ -56,6 +56,7 @@ REQUIRED = {
         "run.compare_group_merges",
         "import_retinanet",
         "window_m=",
+        "run_recall_check",
         "flush_and_unmount",
     ],
     "colab_convert_oamtcd.ipynb": [
