@@ -119,6 +119,7 @@ DECODE_THRESHOLD = 0.01
 PICK_THRESHOLDS = np.round(np.linspace(0.1, 0.3, 9), 3)  # where a fine-tune picks its operating point
 MIN_PICK_GT = 200  # fewer val boxes of a class than this: the prior, not a pick
 PRIOR_THRESHOLD = {1: 0.15, 2: 0.2}  # by the model's class count: where HOT val F1 peaked for each
+REPORT_IOU = 0.5  # a second, report-only match: fAIr's platform metric and the building packs use IoU 0.5
 
 
 @dataclass
@@ -147,6 +148,8 @@ class EvalReport:
     units: list[dict]
     breakdown: dict
     pick_sweep: list[dict] = field(default_factory=list)  # P/R/F1 at each of PICK_THRESHOLDS
+    # the same at IoU > REPORT_IOU, the stricter match fAIr's platform metric uses (no per-unit counts)
+    pick_sweep_iou50: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         """JSON-native view: python scalars, lists and str-keyed dicts only."""
@@ -166,6 +169,7 @@ class EvalReport:
                 str(k): {str(v): dict(m) for v, m in vs.items()} for k, vs in self.breakdown.items()
             },
             "pick_sweep": [dict(s) for s in self.pick_sweep],
+            "pick_sweep_iou50": [dict(s) for s in self.pick_sweep_iou50],
         }
 
     def unit_counts(self) -> list[Counts]:
@@ -237,8 +241,8 @@ def evaluate_units(
         def at(i: int, t: float) -> Detections:
             return filter_score(decoded[i], t)
 
-    def _pooled(t: float) -> list[Counts]:
-        return [count_matches(at(i, t).boxes, u.gt_boxes, iou_threshold) for i, u in enumerate(units)]
+    def _pooled(t: float, iou: float = iou_threshold) -> list[Counts]:
+        return [count_matches(at(i, t).boxes, u.gt_boxes, iou) for i, u in enumerate(units)]
 
     t0 = params.confidence_threshold
     per_unit = _pooled(t0)
@@ -259,14 +263,15 @@ def evaluate_units(
             bp, br, bf = prf(_sum(cs))
             breakdown[key][value] = {"precision": bp, "recall": br, "f1": bf, "n_units": len(cs)}
 
-    def _row(t: float, per_unit: bool = False) -> dict:
-        counts = _pooled(t)
+    def _row(t: float, per_unit: bool = False, iou: float = iou_threshold) -> dict:
+        counts = _pooled(t, iou)
         sp, sr, sf = prf(_sum(counts))
         row = {"threshold": t, "precision": sp, "recall": sr, "f1": sf}
         return row | {"units": [[c.tp, c.fp, c.fn] for c in counts]} if per_unit else row
 
     sweep = [_row(float(t)) for t in thresholds]
     pick_sweep = [_row(float(t), per_unit=True) for t in PICK_THRESHOLDS]
+    pick_sweep_iou50 = [_row(float(t), iou=REPORT_IOU) for t in PICK_THRESHOLDS]
     if sweep:
         f1_max = max(s["f1"] for s in sweep)
         conf_at_max = min(s["threshold"] for s in sweep if s["f1"] == f1_max)
@@ -290,6 +295,7 @@ def evaluate_units(
         units=unit_rows,
         breakdown=breakdown,
         pick_sweep=pick_sweep,
+        pick_sweep_iou50=pick_sweep_iou50,
     )
 
 

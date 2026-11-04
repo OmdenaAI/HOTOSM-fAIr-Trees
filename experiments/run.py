@@ -456,13 +456,18 @@ def _val_thresholds(reports: Mapping, num_classes: int) -> dict[str, float]:
 
 
 def _at_picked(report, threshold: float) -> dict:
-    """P/R/F1 at the pick-grid point nearest ``threshold`` (a mean over sources can fall between points)."""
-    row = min(report.pick_sweep, key=lambda s: abs(s["threshold"] - threshold))
+    """P/R/F1 at the pick-grid point nearest ``threshold`` (a mean over sources can fall between points),
+    and at the stricter IoU 0.5 match (``*_picked_iou50``)."""
+    i = min(range(len(report.pick_sweep)), key=lambda k: abs(report.pick_sweep[k]["threshold"] - threshold))
+    row, strict = report.pick_sweep[i], report.pick_sweep_iou50[i]
     return {
         "picked_threshold": row["threshold"],
         "precision_picked": row["precision"],
         "recall_picked": row["recall"],
         "f1_picked": row["f1"],
+        "precision_picked_iou50": strict["precision"],
+        "recall_picked_iou50": strict["recall"],
+        "f1_picked_iou50": strict["f1"],
     }
 
 

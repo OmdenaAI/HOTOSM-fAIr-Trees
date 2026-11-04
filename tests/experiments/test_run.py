@@ -275,7 +275,8 @@ def test_evaluate_picks_thresholds_on_val(monkeypatch, setup, write_region, fake
     assert out["thresholds"] == {"tree": 0.2, "tree_group": 0.2} and out["threshold_source"] == "val"
     for name in ("val", "val_group", "neon"):
         assert parts[name]["picked_threshold"] == 0.2
-        assert {"f1_picked", "precision_picked", "recall_picked"} <= set(parts[name])
+        assert {"f1_picked", "precision_picked", "recall_picked", "f1_picked_iou50"} <= set(parts[name])
+        assert parts[name]["f1_picked_iou50"] <= parts[name]["f1_picked"]
     assert json.loads((drive / "runs" / "r1" / "thresholds.json").read_text()) == out["thresholds"]
     windows = {"window_m": 40.0, "group_window_m": 120.0}  # where val picked them
     assert json.loads((drive / "runs" / "r1" / "windows.json").read_text()) == windows

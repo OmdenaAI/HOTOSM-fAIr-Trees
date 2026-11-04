@@ -104,6 +104,15 @@ def test_pick_sweep_covers_the_pick_grid(run):
     assert r.to_dict()["pick_sweep"] == r.pick_sweep
 
 
+def test_pick_sweep_is_also_scored_at_iou_50(run):
+    # the planted box [122.9, 133.1] against a 15.5 px truth box: IoU about 0.42
+    r = evaluate_units(run, [_unit("u1", [[123, 123, 138.5, 138.5]])], PARAMS)
+    assert all(s["f1"] == 1.0 for s in r.pick_sweep)
+    assert [s["threshold"] for s in r.pick_sweep_iou50] == [s["threshold"] for s in r.pick_sweep]
+    assert all(s["f1"] == 0.0 and s["recall"] == 0.0 for s in r.pick_sweep_iou50)
+    assert r.to_dict()["pick_sweep_iou50"] == r.pick_sweep_iou50
+
+
 def test_given_group_parts_are_scored_without_decoding(fake_session):
     from fair_trees.decode import Detections
 
