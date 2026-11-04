@@ -25,10 +25,12 @@ from fair_trees.params import (
     CLASSES,
     OUTPUT_NAMES,
     THRESHOLDS_KEY,
+    WINDOWS_KEY,
     InferenceParams,
     caller_sets_threshold,
     parse_class_thresholds,
     parse_inference_params,
+    parse_model_windows,
 )
 from fair_trees.postprocess import to_feature_collection
 from fair_trees.preprocess import (
@@ -187,10 +189,14 @@ def predict_session(
     directory of chips and return a GeoJSON FeatureCollection.
 
     Unless the caller names a confidence threshold, each class is served at the threshold the model's
-    fine-tune picked on val (ONNX metadata ``THRESHOLDS_KEY``), else at the default."""
+    fine-tune picked on val (ONNX metadata ``THRESHOLDS_KEY``), else at the default. Likewise a tree or
+    group window the caller leaves unset is the one those thresholds were picked at (``WINDOWS_KEY``)."""
     p = parse_inference_params(params)
+    meta = _metadata(session)
     if not caller_sets_threshold(params):
-        p = replace(p, class_thresholds=parse_class_thresholds(_metadata(session).get(THRESHOLDS_KEY)))
+        p = replace(p, class_thresholds=parse_class_thresholds(meta.get(THRESHOLDS_KEY)))
+    windows = parse_model_windows(meta.get(WINDOWS_KEY))
+    p = replace(p, **{k: v for k, v in windows.items() if (params or {}).get(k) is None})
     input_images = Path(input_images)
     paths = [input_images] if input_images.is_file() else sorted(input_images.iterdir())
     skipped: list[tuple[str, str]] = []

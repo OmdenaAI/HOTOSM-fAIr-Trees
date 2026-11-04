@@ -26,6 +26,8 @@ GROUP_MERGE_RULES = ("join", "overlap", "drop_edge")  # see decode.merge_group_d
 INPUT_NAME = "images"
 OUTPUT_NAMES = ("cls_logits", "bbox_regression")
 THRESHOLDS_KEY = "fair_trees.confidence_thresholds"  # ONNX metadata: JSON {class name: val-picked threshold}
+WINDOWS_KEY = "fair_trees.windows_m"  # ONNX metadata: JSON {window field: metres the thresholds were picked}
+WINDOW_FIELDS = ("window_m", "group_window_m")
 
 
 @dataclass(frozen=True)
@@ -236,6 +238,27 @@ def parse_class_thresholds(text: str | None) -> tuple[float, ...]:
         logger.warning(f"ignoring the model's confidence thresholds {text!r}: {e}")
         return ()
     return tuple(out)
+
+
+def parse_model_windows(text: str | None) -> dict[str, float]:
+    """The tree and group windows from a model's ``WINDOWS_KEY`` metadata; ``{}`` when absent or invalid
+    (warned), so the model serves at the default windows. Other keys are ignored."""
+    if not text:
+        return {}
+    try:
+        given = json.loads(text)
+        out = {}
+        for name in WINDOW_FIELDS:
+            if name not in given:
+                continue
+            value = given[name]
+            if isinstance(value, bool) or not 5 <= float(value) <= MAX_WINDOW_M:
+                raise ValueError(f"{name}: {value!r} is not in [5, {MAX_WINDOW_M:g}] m")
+            out[name] = float(value)
+    except (TypeError, ValueError) as e:  # json.JSONDecodeError is a ValueError
+        logger.warning(f"ignoring the model's windows {text!r}: {e}")
+        return {}
+    return out
 
 
 def _parse_crop_m(value: Any, default: tuple[float, float]) -> tuple[float, float]:

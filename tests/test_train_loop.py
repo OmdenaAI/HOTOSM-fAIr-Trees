@@ -412,3 +412,5 @@ def test_best_epoch_thresholds_are_saved(monkeypatch, regions, weights, tmp_path
     res = _run(monkeypatch, script, regions, weights, tmp_path / "run")
     assert res.thresholds == {"tree": pytest.approx(0.15)}
     assert json.loads((tmp_path / "run" / "thresholds.json").read_text()) == {"tree": pytest.approx(0.15)}
+    windows = {"window_m": 40.0, "group_window_m": 120.0}  # the val windows the thresholds were picked at
+    assert json.loads((tmp_path / "run" / "windows.json").read_text()) == windows

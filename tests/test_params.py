@@ -10,9 +10,21 @@ from fair_trees.params import (
     SplitParams,
     TrainParams,
     parse_inference_params,
+    parse_model_windows,
     parse_split_params,
     parse_train_params,
 )
+
+
+def test_model_windows_parse_or_are_ignored(caplog):
+    assert parse_model_windows(None) == {}
+    text = '{"window_m": 60, "group_window_m": 120, "other": 1}'
+    assert parse_model_windows(text) == {"window_m": 60.0, "group_window_m": 120.0}
+    with caplog.at_level(logging.WARNING):
+        assert parse_model_windows('{"window_m": 1000}') == {}
+        assert parse_model_windows("not json") == {}
+        assert parse_model_windows('{"window_m": true}') == {}
+    assert caplog.text.count("windows") == 3
 
 
 @pytest.mark.parametrize("value", [None, {}])

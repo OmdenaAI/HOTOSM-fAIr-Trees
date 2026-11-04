@@ -376,7 +376,7 @@ def evaluate(
     from experiments.neon_eval import DF_COMPAT
     from fair_trees.evaluate import evaluate_regions, evaluate_units
     from fair_trees.export import checkpoint_thresholds
-    from fair_trees.params import InferenceParams
+    from fair_trees.params import WINDOW_FIELDS, InferenceParams
 
     out_dir = Path(drive_root) / "runs" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -424,6 +424,7 @@ def evaluate(
     if not thresholds:
         thresholds = _val_thresholds(reports, 2 if two_classes else 1)
         if weights == out_dir / "best.pt":  # what run.export bakes into this run's model.onnx
+            _write_json(out_dir / "windows.json", {k: getattr(params, k) for k in WINDOW_FIELDS})
             _write_json(out_dir / "thresholds.json", thresholds)
     for name, report in reports.items():
         if (t := thresholds.get("tree_group" if name.endswith("_group") else "tree")) is not None:
@@ -570,12 +571,16 @@ def compare_group_merges(
 def export(
     run_id: str, benchmark: Path, *, drive_root: Path = DRIVE_ROOT, data_root: Path = DATA_ROOT
 ) -> dict:
-    """Export ``best.pt`` to ``model.onnx`` and check ONNX against torch on the first NEON benchmark units."""
+    """Export ``best.pt`` to ``model.onnx`` and check ONNX against torch on the first NEON benchmark units.
+
+    The model carries its thresholds and the val windows they were picked at: ``windows.json``, else (a run
+    from before it) the run's configured val windows."""
     import numpy as np
     import onnxruntime
     import torch
 
-    from fair_trees.export import checkpoint_thresholds, export_onnx_bytes
+    from fair_trees.export import checkpoint_thresholds, checkpoint_windows, export_onnx_bytes
+    from fair_trees.params import WINDOW_FIELDS
     from fair_trees.preprocess import preprocess_window
     from fair_trees.serve import ort_run_fn
     from fair_trees.train import build_model, torch_run_fn
@@ -591,7 +596,11 @@ def export(
         )
 
     model = build_model(out_dir / "best.pt", trainable_layers=0)  # one or two classes, as trained
-    data = export_onnx_bytes(model, thresholds=checkpoint_thresholds(out_dir / "best.pt"))
+    windows = checkpoint_windows(out_dir / "best.pt")
+    if windows is None:
+        params = val_params(_stored_config(out_dir / "config.json"))
+        windows = {k: getattr(params, k) for k in WINDOW_FIELDS}
+    data = export_onnx_bytes(model, thresholds=checkpoint_thresholds(out_dir / "best.pt"), windows=windows)
     (out_dir / "model.onnx").write_bytes(data)
 
     torch_run = torch_run_fn(model, torch.device("cpu"))

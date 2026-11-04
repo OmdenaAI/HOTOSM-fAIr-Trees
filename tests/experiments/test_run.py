@@ -277,6 +277,8 @@ def test_evaluate_picks_thresholds_on_val(monkeypatch, setup, write_region, fake
         assert parts[name]["picked_threshold"] == 0.2
         assert {"f1_picked", "precision_picked", "recall_picked"} <= set(parts[name])
     assert json.loads((drive / "runs" / "r1" / "thresholds.json").read_text()) == out["thresholds"]
+    windows = {"window_m": 40.0, "group_window_m": 120.0}  # where val picked them
+    assert json.loads((drive / "runs" / "r1" / "windows.json").read_text()) == windows
 
     (drive / "runs" / "r1" / "thresholds.json").write_text(json.dumps({"tree": 0.125, "tree_group": 0.3}))
     out = run.evaluate("r1", bench, drive_root=drive, data_root=data)
@@ -473,6 +475,31 @@ def test_export_writes_onnx_and_passes_parity(setup):
     assert result["pass"] is True and result["max_abs_diff"] <= 2e-3
     assert (drive / "runs" / "r1" / "model.onnx").stat().st_size > 1_000_000
     assert json.loads((drive / "runs" / "r1" / "export.json").read_text()) == result
+
+
+def _onnx_windows(path):
+    import onnxruntime
+
+    from fair_trees.params import WINDOWS_KEY
+
+    meta = onnxruntime.InferenceSession(str(path), providers=["CPUExecutionProvider"]).get_modelmeta()
+    return json.loads(meta.custom_metadata_map[WINDOWS_KEY])
+
+
+def test_export_carries_the_windows_the_thresholds_were_picked_at(setup):
+    pytest.importorskip("onnx")
+    pytest.importorskip("onnxruntime")
+    from fair_trees.train import build_model
+
+    data, drive, _, bench = setup
+    out = drive / "runs" / "r1"
+    torch.save(build_model(None, trainable_layers=0).state_dict(), out / "best.pt")
+    run.export("r1", bench, drive_root=drive, data_root=data)  # an older run: its configured val windows
+    assert _onnx_windows(out / "model.onnx") == {"window_m": 40.0, "group_window_m": 120.0}
+
+    (out / "windows.json").write_text(json.dumps({"window_m": 60.0, "group_window_m": 120.0}))
+    run.export("r1", bench, drive_root=drive, data_root=data)
+    assert _onnx_windows(out / "model.onnx") == {"window_m": 60.0, "group_window_m": 120.0}
 
 
 def _fake_run(drive, run_id, digests, unit_counts, window_m=None):

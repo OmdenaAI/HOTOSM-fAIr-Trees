@@ -47,7 +47,7 @@ from fair_trees.evaluate import (
     pick_threshold,
     region_units,
 )
-from fair_trees.params import CLASSES, InferenceParams, TrainParams, parse_train_params
+from fair_trees.params import CLASSES, WINDOW_FIELDS, InferenceParams, TrainParams, parse_train_params
 from fair_trees.preprocess import preprocess_window
 from fair_trees.serve import RunFn
 
@@ -511,14 +511,15 @@ def _load_scaler_state(scaler: torch.amp.GradScaler, state: Mapping) -> None:
 
 
 def _supersede(out_dir: Path) -> Path:
-    """Move an earlier run's checkpoints, best.pt, metrics.csv and thresholds.json into `superseded-<n>`."""
+    """Move an earlier run's checkpoints, best.pt, metrics.csv, thresholds.json and windows.json into
+    `superseded-<n>`."""
     n = 0
     while (out_dir / f"superseded-{n}").exists():
         n += 1
     dest = out_dir / f"superseded-{n}"
     dest.mkdir()
     old = [path for _, path in _checkpoints(out_dir)]
-    names = ("best.pt", "metrics.csv", "thresholds.json")
+    names = ("best.pt", "metrics.csv", "thresholds.json", "windows.json")
     old += [out_dir / name for name in names if (out_dir / name).exists()]
     for path in old:
         os.replace(path, dest / path.name)
@@ -724,9 +725,11 @@ def train(
             s.best_metrics = dict(metrics)
             save_file(model.state_dict(), out_dir, "best.pt", tmp_dir=tmp_dir, keep_last=None)
             if thresholds := _thresholds(s.best_metrics):
-                part = out_dir / "thresholds.json.part"
-                part.write_text(json.dumps(thresholds, indent=2))
-                os.replace(part, out_dir / "thresholds.json")
+                windows = {name: getattr(val_params, name) for name in WINDOW_FIELDS}
+                for name, values in (("windows.json", windows), ("thresholds.json", thresholds)):
+                    part = out_dir / f"{name}.part"
+                    part.write_text(json.dumps(values, indent=2))
+                    os.replace(part, out_dir / name)
         else:
             s.patience_left -= 1
 

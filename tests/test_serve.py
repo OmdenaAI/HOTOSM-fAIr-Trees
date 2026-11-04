@@ -7,7 +7,7 @@ import pytest
 from pyproj import Transformer
 
 from fair_trees.georef import tile_bounds_3857
-from fair_trees.params import THRESHOLDS_KEY, InferenceParams
+from fair_trees.params import THRESHOLDS_KEY, WINDOWS_KEY, InferenceParams
 from fair_trees.preprocess import mosaic_chips, window_grid
 from fair_trees.serve import ort_run_fn, predict_mosaic, predict_mosaic_classes, predict_session
 
@@ -92,6 +92,21 @@ def test_model_without_or_with_bad_thresholds_serves_at_the_default(
     assert _classes(fc) == [1, 2] and "thresholds" in caplog.text
     s = _k2_with_thresholds(fake_session, {"tree": 0.995})  # a class it lacks keeps the default
     assert _classes(predict_session(s, tmp_path, {})) == [2]
+
+
+def test_model_windows_apply_unless_the_caller_sets_them(write_oam_chip, fake_session, tmp_path):
+    for i in range(4):
+        for j in range(4):
+            write_oam_chip(X0 + i, Y0 + j)
+
+    def windows_run(metadata, params):
+        s = fake_session({CENTRE_ANCHOR_800: 5.0}, metadata=metadata)
+        predict_session(s, tmp_path, params)
+        return len(s.calls)
+
+    model = {WINDOWS_KEY: json.dumps({"window_m": 80.0, "group_window_m": 120.0})}
+    assert windows_run(model, {}) == windows_run({}, {"window_m": 80}) < windows_run({}, {})
+    assert windows_run(model, {"window_m": 40}) == windows_run({}, {})
 
 
 def test_trees_centred_in_a_served_group_are_tagged(write_oam_chip, fake_session, tmp_path):
