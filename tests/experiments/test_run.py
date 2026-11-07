@@ -420,6 +420,18 @@ def test_recall_check_scores_a_run_at_its_picked_threshold(monkeypatch, setup, f
         run_recall_check("r1", part="hot-test", drive_root=drive, data_root=data, benchmark=bench)
 
 
+def test_small_crowns_writes_both_sheets_and_the_rows(monkeypatch, setup, fake_session):
+    from experiments.small_crowns import run_small_crowns
+
+    data, drive, _, bench = setup
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+    out = run_small_crowns("r1", drive_root=drive, data_root=data, benchmark=bench)
+    folder = drive / "runs" / "r1"
+    assert all((folder / f"small_crowns_val_{name}.png").exists() for name in ("misses", "hits"))
+    assert json.loads((folder / "small_crowns_val.json").read_text()) == out
+    assert [b["bin_m"] for b in out["by_size"]] == [[0.0, 1.5], [1.5, 2.5]]
+
+
 def test_evaluate_window_overrides_val_and_region_parts(monkeypatch, setup, write_region, fake_session):
     data, drive, _, bench = setup
     oamtcd = data / "oamtcd"

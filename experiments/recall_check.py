@@ -99,6 +99,21 @@ def _summary(rows: Sequence[dict]) -> dict:
     }
 
 
+def decode_trees(run_fn, units: Sequence, params) -> list:
+    """Each unit's tree detections at ``DECODE_THRESHOLD``, those centred in its ignore mask dropped."""
+    from fair_trees.evaluate import DECODE_THRESHOLD, _drop_ignored
+    from fair_trees.serve import predict_mosaic_classes
+
+    low = dataclasses.replace(params, confidence_threshold=DECODE_THRESHOLD, class_thresholds=())
+    out = []
+    for u in units:
+        dets = predict_mosaic_classes(run_fn, u.mosaic, low, (0,))[0]
+        if u.ignore_mask is not None:
+            dets = _drop_ignored(dets, np.asarray(u.ignore_mask, bool))
+        out.append(dets)
+    return out
+
+
 def check_units(
     run_fn,
     units: Sequence,
@@ -112,18 +127,9 @@ def check_units(
     """Score tree class ``units`` at ``threshold`` under each box scale (base decode), NMS threshold and
     tree window; ``params`` is the run's val setting."""
     from fair_trees.decode import filter_score
-    from fair_trees.evaluate import DECODE_THRESHOLD, _drop_ignored
-    from fair_trees.serve import predict_mosaic_classes
 
     def decode(p) -> list[np.ndarray]:
-        low = dataclasses.replace(p, confidence_threshold=DECODE_THRESHOLD, class_thresholds=())
-        out = []
-        for u in units:
-            dets = predict_mosaic_classes(run_fn, u.mosaic, low, (0,))[0]
-            if u.ignore_mask is not None:
-                dets = _drop_ignored(dets, np.asarray(u.ignore_mask, bool))
-            out.append(filter_score(dets, threshold).boxes)
-        return out
+        return [filter_score(d, threshold).boxes for d in decode_trees(run_fn, units, p)]
 
     def rows(boxes: Sequence[np.ndarray], factor: float = 1.0) -> list[dict]:
         return [
@@ -165,10 +171,9 @@ def check_units(
     }
 
 
-def run_recall_check(
-    run_id: str, *, part: str = "val", drive_root=None, data_root=None, benchmark=None
-) -> dict:
-    """``check_units`` on a run's ``best.pt``: its val regions, or a frozen benchmark region part."""
+def run_units(run_id: str, *, part: str = "val", drive_root=None, data_root=None, benchmark=None):
+    """(run folder, val params, tree units of ``part``, run function of ``best.pt``, picked tree threshold):
+    ``part`` is the run's val regions or a frozen benchmark region part."""
     from experiments import run
     from fair_trees.evaluate import PRIOR_THRESHOLD, region_units
     from fair_trees.export import checkpoint_thresholds
@@ -188,9 +193,17 @@ def run_recall_check(
         units = found[0]
     weights = out_dir / "best.pt"
     threshold = (checkpoint_thresholds(weights) or {}).get("tree", PRIOR_THRESHOLD[1])
-    result = {"run_id": run_id, "part": part} | check_units(
-        run._run_fn(weights, None), units, params, threshold
+    return out_dir, params, units, run._run_fn(weights, None), threshold
+
+
+def run_recall_check(
+    run_id: str, *, part: str = "val", drive_root=None, data_root=None, benchmark=None
+) -> dict:
+    """``check_units`` on a run's ``best.pt``: its val regions, or a frozen benchmark region part."""
+    out_dir, params, units, run_fn, threshold = run_units(
+        run_id, part=part, drive_root=drive_root, data_root=data_root, benchmark=benchmark
     )
+    result = {"run_id": run_id, "part": part} | check_units(run_fn, units, params, threshold)
     path = out_dir / f"recall_check_{part}.json"
     path.write_text(json.dumps(result, indent=2))
     return result
