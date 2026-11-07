@@ -103,10 +103,12 @@ shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
   mosaic limit. Each region keeps its chips (PNG or JPEG as stored) and its own `labels.geojson` and `ignore.geojson`;
   every feature that touches the region's tiles is written, so a crown cut by a block edge is labelled on both sides.
 - **Labels.** A tree outside every `tree_group` with a known diameter (0 to 30 m) becomes a square of that side
-  centred on the point (built in UTM 28N, stored in EPSG:4326).
-- **Ignore.** Every `tree_group` polygon, plus a 4 m square around each tree with an unknown diameter that is not in a
-  group. Trees inside a group get nothing, as the group already masks them. A crown from the other split that reaches
-  into a region is masked there, never labelled.
+  centred on the point (built in UTM 28N, stored in EPSG:4326). Since the 2026-10-31 conversion below, every
+  `tree_group` polygon of the region's own split is a `label: 2` feature, and `region.json` lists both classes;
+  training leaves the tree class unsupervised inside it.
+- **Ignore.** A 4 m square around each tree with an unknown diameter that is not in a group. Trees inside a group get
+  nothing, as the group covers them. A crown or group from the other split that reaches into a region is masked
+  there, never labelled. (Before 2026-10-31, every group polygon was an ignore polygon instead of a label.)
 - **No split buffer.** HOT's split leaves no gap between train and val, so crowns and imagery can sit next to each other
   across the boundary; the other-split masking above is the only guard.
 
@@ -127,6 +129,16 @@ shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
   polygons, so about 19.5% of the committed `hot-platform` run's draws went to `unknown`-biome regions, oversampled
   about 3.5x. Every other count above matches it, and region ids come from the tile blocks, so val scores compare
   across the two.
+
+### Conversion with tree groups as labels (2026-10-31, converter 2d3217a81c193042e99acab554c61e8325092ced)
+
+- Regions, chips, crown boxes and every other count match the 2026-10-28 run, except the groups: 9,869 group labels,
+  and 25 groups masked as other-split (21 straddle the train/val boundary, 4 sit on test tiles).
+- Shard manifest sha256 `84f895007de07669b33b0a63c3043d0942aaaf943226edfe7658bc2d4f19e35f`. The 2026-10-28 shards are
+  kept on Drive as `shards/hot-24d84f0f/`.
+- Drive-to-`/content` copy of `z20-0000.tar`: 271.8 MB/s.
+- The tree-only val score is unchanged: `hot-platform-joint0.3`'s best weights score val F1 0.550 on these shards, as
+  on the old ones.
 
 ### Teacher-masked HOT sets (2026-10-28, code 4d069e25acd19575c35ebe0373fe02ff3cd97766)
 

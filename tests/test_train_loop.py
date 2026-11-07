@@ -208,6 +208,37 @@ def test_fine_tune_on_fair_chips(monkeypatch, write_oam_chip, geo, weights, tmp_
     assert res.history[0]["sampler/draws/zoom/22"] == 3.0
 
 
+def test_fine_tune_keeps_k1_unless_asked(monkeypatch, write_oam_chip, geo, weights, tmp_path):
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(3)]
+    labels = tmp_path / "labels.geojson"
+    fc = geo.feature_collection([geo.box_polygon((5, 5, 15, 15))])
+    fc["features"] += geo.feature_collection([geo.box_polygon((40, 40, 90, 90))], label=2)["features"]
+    labels.write_text(json.dumps(fc))
+    monkeypatch.setattr(T, "_validate", Script([0.2]).validate)
+    hp = {"epochs": 1, "batch_size": 2, "samples_per_epoch": 2, "amp": False}
+    for name, extra, k in (("k1", {}, 1), ("k2", {"num_classes": 2}, 2)):
+        res = T.fine_tune(
+            chips[:2],
+            chips[2:],
+            labels,
+            hp | extra,
+            weights=weights,
+            out_dir=tmp_path / name,
+            num_workers=0,
+            tmp_dir=tmp_path / "tmp",
+        )
+        state = torch.load(res.best_checkpoint, weights_only=True)
+        assert T.checkpoint_num_classes(state) == k
+
+
+def test_two_classes_without_group_labels_are_refused(monkeypatch, regions, weights, tmp_path):
+    script = Script([0.1])
+    cfg = dataclasses.replace(CFG, num_classes=2)
+    with pytest.raises(ValueError, match="tree_group"):
+        _run(monkeypatch, script, regions, weights, tmp_path / "run", cfg=cfg)
+    assert script.calls == 0 and not (tmp_path / "run").exists()
+
+
 def test_fine_tune_refuses_to_resume_on_changed_data(monkeypatch, write_oam_chip, geo, weights, tmp_path):
     chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(4)]
     labels = tmp_path / "labels.geojson"
@@ -271,11 +302,13 @@ def test_resume_without_a_readable_checkpoint_is_refused(monkeypatch, regions, w
 
 
 def _stub_reports(monkeypatch, by_source):
+    """``by_source`` maps a source, or ``(source, class_index)``, to the (f1_max, ap40) it reports."""
     calls = []
 
-    def fake_evaluate_units(run_fn, units, params):
+    def fake_evaluate_units(run_fn, units, params, *, class_index=0):
         calls.append([u.meta["source"] for u in units])
-        f1, ap = by_source[units[0].meta["source"]]
+        source = units[0].meta["source"]
+        f1, ap = by_source.get((source, class_index)) or by_source[source]
         return SimpleNamespace(f1_max=f1, conf_at_max=0.3, ap40=ap, aoi_f1=f1)
 
     monkeypatch.setattr(T, "evaluate_units", fake_evaluate_units)
@@ -289,7 +322,7 @@ def _units(*sources):
 def test_validate_balances_sources(monkeypatch):
     calls = _stub_reports(monkeypatch, {"a": (0.8, 0.6), "b": (0.2, 0.4)})
 
-    units = _units("a", "b", "a", "b")
+    units = {"tree": _units("a", "b", "a", "b")}
     v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
 
     assert v["f1_max"] == pytest.approx(0.5) and v["ap40"] == pytest.approx(0.5)
@@ -302,8 +335,21 @@ def test_validate_balances_sources(monkeypatch):
 def test_validate_single_source_unchanged(monkeypatch):
     calls = _stub_reports(monkeypatch, {"a": (0.7, 0.5)})
 
-    v = T._validate(torch.nn.Identity(), torch.device("cpu"), _units("a", "a"), InferenceParams(), 0)
+    v = T._validate(
+        torch.nn.Identity(), torch.device("cpu"), {"tree": _units("a", "a")}, InferenceParams(), 0
+    )
 
     assert calls == [["a", "a"]]
     assert set(v) == {"f1_max", "conf_at_max", "ap40", "aoi_f1", "seconds"}
     assert v["f1_max"] == 0.7
+
+
+def test_validate_means_over_source_and_class(monkeypatch):
+    calls = _stub_reports(monkeypatch, {("hot", 0): (0.6, 0.5), ("hot", 1): (0.2, 0.1)})
+    units = {"tree": _units("hot", "hot"), "tree_group": _units("hot")}
+
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    assert v["f1_max"] == pytest.approx(0.4) and v["ap40"] == pytest.approx(0.3)
+    assert v["f1_max_hot"] == 0.6 and v["f1_max_hot_tree_group"] == 0.2 and v["ap40_hot_tree_group"] == 0.1
+    assert sorted(calls) == [["hot"], ["hot", "hot"]]

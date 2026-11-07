@@ -43,6 +43,32 @@ def test_blend_of_two_models_loads(tmp_path):
     build_model(out, trainable_layers=0)
 
 
+CLS_W = "head.classification_head.cls_logits.weight"
+CLS_B = "head.classification_head.cls_logits.bias"
+
+
+def test_interpolate_k1_base_k2_tuned(tmp_path):
+    torch.manual_seed(0)
+    base = build_model(None, trainable_layers=0).state_dict()
+    tuned = build_model(None, trainable_layers=0, num_classes=2).state_dict()
+    torch.save(base, tmp_path / "base.pt")
+    torch.save(tuned, tmp_path / "tuned.pt")
+    out = torch.load(interpolate(tmp_path / "base.pt", tmp_path / "tuned.pt", 0.5, tmp_path / "w.pt"))
+    for key in (CLS_W, CLS_B):
+        assert torch.allclose(out[key][0::2], (base[key] + tuned[key][0::2]) / 2)
+        assert torch.equal(out[key][1::2], tuned[key][1::2])
+    reg = "head.regression_head.bbox_reg.weight"
+    assert torch.allclose(out[reg], (base[reg] + tuned[reg]) / 2)
+    assert build_model(tmp_path / "w.pt", trainable_layers=0).head.classification_head.num_classes == 2
+
+
+def test_interpolate_refuses_k2_base_k1_tuned(tmp_path):
+    torch.save(build_model(None, trainable_layers=0, num_classes=2).state_dict(), tmp_path / "base.pt")
+    torch.save(build_model(None, trainable_layers=0).state_dict(), tmp_path / "tuned.pt")
+    with pytest.raises(ValueError, match="2 classes"):
+        interpolate(tmp_path / "base.pt", tmp_path / "tuned.pt", 0.5, tmp_path / "w.pt")
+
+
 def test_legacy_fpn_keys_are_read_through_the_model(tmp_path):
     # the release checkpoint stores FPN convs as `inner_blocks.0.weight`; current torchvision saves
     # `inner_blocks.0.0.weight` and renames the old keys only when loading into a model

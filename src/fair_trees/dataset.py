@@ -12,6 +12,7 @@ from collections import Counter, OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple
 
 import numpy as np
 import rasterio
@@ -21,7 +22,7 @@ from pyproj import Transformer
 
 from fair_trees.augment import DOWNSCALE_P, colour_jitter, downscale, flip, rot90
 from fair_trees.georef import ORIGIN_SHIFT, mercator_y_to_lat, parse_oam_name, tile_bounds_3857, true_gsd
-from fair_trees.params import TrainParams
+from fair_trees.params import CLASSES, TrainParams
 from fair_trees.preprocess import Window, read_chip, tile_groups
 
 logger = logging.getLogger(__name__)
@@ -38,7 +39,8 @@ _REQUIRED_KEYS = ("id", "source", "biome", "licence", "split", "footprint", "val
 class Region:
     """One labelled area: its chips per zoom, label and ignore files, and the footprint that was mapped.
 
-    ``footprint`` is an EPSG:4326 GeoJSON geometry (``None`` = everything is mapped).
+    ``footprint`` is an EPSG:4326 GeoJSON geometry (``None`` = everything is mapped); ``classes`` names the
+    classes its labels cover (a class not named is unlabelled there, not absent).
     """
 
     id: str
@@ -51,20 +53,22 @@ class Region:
     ignore_path: Path | None
     footprint: dict | None
     valid_area_m2: float
+    classes: tuple[str, ...] = ("tree",)
 
 
 def load_geojson(path: Path) -> dict:
     return json.loads(Path(path).read_text())
 
 
-def _is_tree_label(properties: dict) -> bool:
-    """A missing label is a tree; a present one must be the number 1."""
+def _label_of(properties: dict) -> int | None:
+    """A missing label is a tree (1); a present one must be the number 1 or 2 (tree_group), else None."""
     if "label" not in properties:
-        return True
+        return 1
     try:
-        return float(properties["label"]) == 1.0
+        value = float(properties["label"])
     except (TypeError, ValueError):
-        return False
+        return None
+    return int(value) if value in (1.0, 2.0) else None
 
 
 def _invalid_reason(ring: np.ndarray) -> str | None:
@@ -91,15 +95,16 @@ def _exterior_ring(part: list) -> tuple[np.ndarray, str | None]:
     return ring, _invalid_reason(ring)
 
 
-def label_rings(geojson: dict) -> list[np.ndarray]:
-    """Exterior rings of the tree labels as (k, 2) float64 lon/lat arrays, one per polygon part.
+def label_rings(geojson: dict, label: int = 1) -> list[np.ndarray]:
+    """Exterior rings of the labels of class ``label`` (1 tree, 2 tree_group) as (k, 2) float64 lon/lat
+    arrays, one per polygon part.
 
-    Features whose ``label`` is present and not 1 are dropped silently; empty, unsupported and invalid
-    geometries are skipped with a warning.
+    Features of another class are dropped silently; empty, unsupported and invalid geometries are skipped
+    with a warning.
     """
     rings = []
     for i, feature in enumerate(geojson.get("features", [])):
-        if not _is_tree_label(feature.get("properties") or {}):
+        if _label_of(feature.get("properties") or {}) != label:
             continue
         geometry = feature.get("geometry")
         if not geometry or not geometry.get("coordinates"):
@@ -122,11 +127,11 @@ def label_rings(geojson: dict) -> list[np.ndarray]:
     return rings
 
 
-def labels_to_boxes(geojson: dict, transform_3857: Affine) -> np.ndarray:
-    """Tight XYXY box per label ring in the pixel frame of ``transform_3857``, float32 (N, 4)."""
+def labels_to_boxes(geojson: dict, transform_3857: Affine, label: int = 1) -> np.ndarray:
+    """Tight XYXY box per ring of class ``label`` in the pixel frame of ``transform_3857``, float32 (N, 4)."""
     inverse = ~transform_3857
     boxes = []
-    for ring in label_rings(geojson):
+    for ring in label_rings(geojson, label):
         x, y = _TO_3857.transform(ring[:, 0], ring[:, 1])
         cols, rows = inverse @ (np.asarray(x), np.asarray(y))
         boxes.append([cols.min(), rows.min(), cols.max(), rows.max()])
@@ -171,6 +176,27 @@ def rasterize_mask(
     return masked
 
 
+def rasterize_labels(
+    region: Region, transform_3857: Affine, shape: tuple[int, int], label: int
+) -> np.ndarray:
+    """(H, W) bool, True inside the polygons of the region's class-``label`` labels (holes stay False, as
+    for ignore polygons)."""
+    shapes = [
+        (_project_geometry(f["geometry"]), 1)
+        for f in load_geojson(region.labels_path).get("features", [])
+        if _label_of(f.get("properties") or {}) == label
+        and f.get("geometry")
+        and f["geometry"].get("type") in ("Polygon", "MultiPolygon")
+        and f["geometry"].get("coordinates")
+    ]
+    if not shapes:
+        return np.zeros(shape, bool)
+    burned = rasterio.features.rasterize(
+        shapes, out_shape=shape, transform=transform_3857, fill=0, dtype="uint8"
+    )
+    return burned == 1
+
+
 def boxes_in_window(
     boxes: np.ndarray,
     unmasked: np.ndarray,
@@ -185,6 +211,15 @@ def boxes_in_window(
     A box is kept when at least ``min_fraction`` of its unclipped area is unmasked pixels (by pixel
     centre) inside the window. ``unmasked`` is the window-sized (height, width) boolean image.
     """
+    clipped, kept = window_boxes(boxes, unmasked, x0, y0, width, height, min_fraction)
+    return clipped[kept]
+
+
+def window_boxes(
+    boxes: np.ndarray, unmasked: np.ndarray, x0: int, y0: int, width: int, height: int, min_fraction: float
+) -> tuple[np.ndarray, np.ndarray]:
+    """Every box of positive area clipped to the window, float32 (M, 4), and whether the 40 % rule keeps
+    it."""
     shifted = np.asarray(boxes, np.float64).reshape(-1, 4) - np.array([x0, y0, x0, y0])
     area = (shifted[:, 2] - shifted[:, 0]) * (shifted[:, 3] - shifted[:, 1])
     shifted, area = shifted[area > 0], area[area > 0]
@@ -198,7 +233,7 @@ def boxes_in_window(
     r1 = np.clip(edges[:, 1], 0, unmasked.shape[0])
     r2 = np.clip(edges[:, 3], r1, unmasked.shape[0])
     count = integral[r2, c2] - integral[r1, c2] - integral[r2, c1] + integral[r1, c1]
-    return clipped[count / area >= min_fraction].astype(np.float32).reshape(-1, 4)
+    return clipped.astype(np.float32).reshape(-1, 4), count / area >= min_fraction
 
 
 def load_regions(root: Path) -> list[Region]:
@@ -218,6 +253,10 @@ def load_regions(root: Path) -> list[Region]:
             if found:
                 chips[int(zdir.name[1:])] = found
         ignore = d / "ignore.geojson"
+        classes = tuple(meta.get("classes", ("tree",)))
+        unknown = sorted(set(classes) - set(CLASSES))
+        if unknown:
+            raise ValueError(f"{d}: unknown classes {unknown} in region.json, expected a subset of {CLASSES}")
         regions.append(
             Region(
                 id=meta["id"],
@@ -230,13 +269,19 @@ def load_regions(root: Path) -> list[Region]:
                 ignore_path=ignore if ignore.is_file() else None,
                 footprint=meta["footprint"],
                 valid_area_m2=float(meta["valid_area_m2"]),
+                classes=classes,
             )
         )
     return sorted(regions, key=lambda r: r.id)
 
 
 def load_fair_dataset(chips: Sequence[Path], labels_path: Path, *, split: str = "train") -> list[Region]:
-    """Regions for a mapper's own chips: one per zoom and 8-connected tile component."""
+    """Regions for a mapper's own chips: one per zoom and 8-connected tile component.
+
+    The regions label tree_group too when the labels file holds any tree_group (``label: 2``) feature.
+    """
+    has_groups = bool(label_rings(load_geojson(labels_path), 2))
+    classes = CLASSES if has_groups else ("tree",)
     named, xyzs = [], []
     for path in map(Path, chips):
         xyz = parse_oam_name(path)
@@ -266,6 +311,7 @@ def load_fair_dataset(chips: Sequence[Path], labels_path: Path, *, split: str = 
                 ignore_path=None,
                 footprint=None,
                 valid_area_m2=len(paths) * (tile_px * gsd) ** 2,
+                classes=classes,
             )
         )
     return regions
@@ -361,7 +407,9 @@ class RegionGeom:
     """A region at one zoom: its tile grid, pixel frame, label boxes and low-resolution mask.
 
     The pixel frame starts at the north-west corner of tile ``(xmin, ymin)``; absent tiles are holes.
-    ``lowres_masked`` has one cell per ``cell_px`` x ``cell_px`` pixels, True = absent tile or masked.
+    ``boxes`` are the tree labels, ``group_boxes`` the tree_group labels (empty unless the region labels
+    groups). ``lowres_masked`` has one cell per ``cell_px`` x ``cell_px`` pixels, True = absent tile or
+    masked.
     """
 
     tiles: Mapping[tuple[int, int], Path]
@@ -373,6 +421,7 @@ class RegionGeom:
     transform_3857: Affine
     gsd_m: float
     boxes: np.ndarray
+    group_boxes: np.ndarray
     lowres_masked: np.ndarray
     cell_px: int
 
@@ -400,7 +449,11 @@ def _build_geom(region: Region, zoom: int) -> RegionGeom:
     res = 2 * ORIGIN_SHIFT / 2**zoom / tile_px
     transform_3857 = Affine(res, 0, minx, 0, -res, maxy)
     gsd_m = true_gsd(zoom, mercator_y_to_lat(maxy - nrows * tile_px * res / 2))
-    boxes = labels_to_boxes(load_geojson(region.labels_path), transform_3857)
+    labels = load_geojson(region.labels_path)
+    boxes = labels_to_boxes(labels, transform_3857)
+    group_boxes = np.zeros((0, 4), np.float32)
+    if "tree_group" in region.classes:
+        group_boxes = labels_to_boxes(labels, transform_3857, label=2)
 
     cells = LOWRES_CELLS if tile_px % LOWRES_CELLS == 0 else 1
     cell_px = tile_px // cells
@@ -420,6 +473,7 @@ def _build_geom(region: Region, zoom: int) -> RegionGeom:
         transform_3857=transform_3857,
         gsd_m=gsd_m,
         boxes=boxes,
+        group_boxes=group_boxes,
         lowres_masked=lowres,
         cell_px=cell_px,
     )
@@ -618,8 +672,42 @@ def plan_epoch(
     return specs
 
 
-def load_sample(spec: SampleSpec, cache: RegionCache, cfg: TrainParams) -> tuple[np.ndarray, np.ndarray]:
-    """One training crop: uint8 (n, n, 3) with masked pixels at 0, and float32 (K, 4) boxes in crop pixels.
+class Sample(NamedTuple):
+    """One training crop and its targets, in crop pixels."""
+
+    rgb: np.ndarray  # uint8 (n, n, 3), masked pixels at 0
+    boxes: np.ndarray  # float32 (K, 4) XYXY, trees first, then groups
+    labels: np.ndarray  # int64 (K,), index into CLASSES
+    unsupervised: np.ndarray  # bool (len(CLASSES), n, n): True = no negatives for that class there
+
+
+def _unsupervised(region: Region, crop_t: Affine, n: int, dropped_groups: np.ndarray) -> np.ndarray:
+    """Per class, the crop pixels where it is not supervised.
+
+    A class the region does not label is unsupervised everywhere; where the region labels tree_group, tree
+    is unsupervised inside the group polygons, and tree_group inside the groups the 40 % rule dropped.
+    """
+    out = np.zeros((len(CLASSES), n, n), bool)
+    for c, name in enumerate(CLASSES):
+        if name not in region.classes:
+            out[c] = True
+    if "tree_group" in region.classes:
+        out[0] |= rasterize_labels(region, crop_t, (n, n), 2)
+        out[1] |= burn_boxes(dropped_groups, (n, n))
+    return out
+
+
+def burn_boxes(boxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
+    """(H, W) bool, True on the pixels whose centre lies inside any of the boxes (as ``boxes_in_window``)."""
+    out = np.zeros(shape, bool)
+    edges = np.ceil(np.asarray(boxes, np.float64).reshape(-1, 4) - 0.5).astype(np.int64)
+    for x1, y1, x2, y2 in np.clip(edges, 0, [shape[1], shape[0], shape[1], shape[0]]):
+        out[y1:y2, x1:x2] = True
+    return out
+
+
+def load_sample(spec: SampleSpec, cache: RegionCache, cfg: TrainParams) -> Sample:
+    """One training crop, its class-labelled boxes and the pixels where each class is unsupervised.
 
     A pure function of ``(spec, cfg)`` and the files on disk: all randomness comes from ``spec.aug_seed``.
     The cache's arrays are only read, never written.
@@ -643,9 +731,14 @@ def load_sample(spec: SampleSpec, cache: RegionCache, cfg: TrainParams) -> tuple
             rgb[dst] = chip_rgb[src]
             valid[dst] = chip_valid[src]
 
+    region = cache.region(spec.region_id)
     crop_t = geom.transform_3857 @ Affine.translation(w.x, w.y)
-    masked = ~valid | rasterize_mask(cache.region(spec.region_id), crop_t, (n, n))
-    boxes = boxes_in_window(geom.boxes, ~masked, w.x, w.y, n, n)
+    masked = ~valid | rasterize_mask(region, crop_t, (n, n))
+    trees = boxes_in_window(geom.boxes, ~masked, w.x, w.y, n, n)
+    groups, kept = window_boxes(geom.group_boxes, ~masked, w.x, w.y, n, n, MIN_BOX_FRACTION)
+    unsupervised = _unsupervised(region, crop_t, n, groups[~kept])
+    boxes = np.concatenate([trees, groups[kept]])
+    labels = np.repeat(np.arange(2, dtype=np.int64), [len(trees), int(kept.sum())])
 
     rng = np.random.default_rng(spec.aug_seed)
     aug = cfg.augment
@@ -653,13 +746,15 @@ def load_sample(spec: SampleSpec, cache: RegionCache, cfg: TrainParams) -> tuple
         rgb = downscale(rgb, rng)
     for enabled, transform in ((aug.flips, flip), (aug.rot90, rot90)):
         if enabled:
-            stack, boxes = transform(np.dstack([rgb, masked.astype(np.uint8)]), boxes, rng)
+            layers = np.dstack([rgb, masked.astype(np.uint8), *unsupervised.astype(np.uint8)])
+            stack, boxes = transform(layers, boxes, rng)
             rgb, masked = stack[..., :3], stack[..., 3].astype(bool)
+            unsupervised = np.moveaxis(stack[..., 4:], -1, 0).astype(bool)
     if aug.colour_jitter:
         rgb = colour_jitter(np.ascontiguousarray(rgb), rng)
     rgb = np.array(rgb)  # contiguous and writable
     rgb[masked] = 0  # after jitter, so masked pixels stay exactly 0
-    return rgb, boxes.astype(np.float32)
+    return Sample(rgb, boxes.astype(np.float32), labels, np.ascontiguousarray(unsupervised))
 
 
 def sampler_stats(specs: Sequence[SampleSpec], cache: RegionCache) -> dict[str, float]:

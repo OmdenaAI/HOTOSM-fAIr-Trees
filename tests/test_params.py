@@ -83,6 +83,14 @@ def test_inference_ranges(hp):
         parse_inference_params(hp)
 
 
+def test_group_window_param():
+    assert InferenceParams().group_window_m == 120.0
+    assert parse_inference_params({"group_window_m": 80}).group_window_m == 80.0
+    for bad in (4, 201):
+        with pytest.raises(ValueError, match="group_window_m"):
+            parse_inference_params({"group_window_m": bad})
+
+
 def test_split_params():
     p = parse_split_params({"val_ratio": 0.3, "z_ref": 19, "block_size": 2})
     assert p == SplitParams(val_ratio=0.3, split_seed=42, block_size=2, z_ref=19)
@@ -128,6 +136,15 @@ def test_l2sp_forces_zero_weight_decay():
 def test_train_ranges(hp):
     with pytest.raises(ValueError):
         parse_train_params(hp)
+
+
+def test_num_classes_parsed():
+    assert TrainParams().num_classes is None
+    assert parse_train_params({"num_classes": 1}).num_classes == 1
+    assert parse_train_params({"num_classes": 2}).num_classes == 2
+    for bad in (0, 3, "two"):
+        with pytest.raises(ValueError, match="num_classes"):
+            parse_train_params({"num_classes": bad})
 
 
 def test_zoom_weight_keys_from_json():

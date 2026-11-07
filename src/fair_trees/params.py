@@ -19,6 +19,8 @@ IMAGE_STD = (0.229, 0.224, 0.225)
 MAX_WINDOW_M = 200.0
 MAX_MOSAIC_PIXELS = 2**28  # 16384 x 16384 px, ~1 GiB of RGB + valid mask across one call's mosaics
 
+CLASSES = ("tree", "tree_group")  # head order; GeoJSON label and output class number = index + 1
+
 INPUT_NAME = "images"
 OUTPUT_NAMES = ("cls_logits", "bbox_regression")
 
@@ -40,6 +42,7 @@ class InferenceParams:
     iou_threshold: float = 0.15
     edge_band: float = 0.05
     min_valid_fraction: float = 0.2
+    group_window_m: float = 120.0  # tree_group window; window_m is the tree window
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,7 @@ class TrainParams:
     biome_alpha: float = 0.5
     region_repeat_cap: int | None = None
     empty_crop_cap: float | None = None
+    num_classes: int | None = None  # None = the start weights' classes; 2 adds tree_group to a tree model
     augment: AugmentParams = AugmentParams()
 
 
@@ -183,6 +187,7 @@ def parse_inference_params(params: Mapping | None) -> InferenceParams:
         }
     )
     _in_range("window_m", p.window_m, 5, MAX_WINDOW_M)
+    _in_range("group_window_m", p.group_window_m, 5, MAX_WINDOW_M)
     _in_range("window_overlap", p.window_overlap, 0, 0.9)
     for name in ("confidence_threshold", "nms_threshold", "iou_threshold"):
         _in_range(name, getattr(p, name), 0, 1)
@@ -249,6 +254,7 @@ _INT_TRAIN_FIELDS = (
     "seed",
     "keep_last",
     "region_repeat_cap",
+    "num_classes",
 )
 _FLOAT_TRAIN_FIELDS = (
     "learning_rate",
@@ -301,6 +307,8 @@ def parse_train_params(hp: Mapping | None) -> TrainParams:
         _at_least("region_repeat_cap", p.region_repeat_cap, 1)
     if p.empty_crop_cap is not None:
         _in_range("empty_crop_cap", p.empty_crop_cap, 0, 1)
+    if p.num_classes is not None:
+        _in_range("num_classes", p.num_classes, 1, len(CLASSES))
     if p.l2sp_alpha > 0:
         logger.info("l2sp_alpha > 0: L2-SP replaces weight decay, so weight_decay is set to 0")
         p = replace(p, weight_decay=0.0)

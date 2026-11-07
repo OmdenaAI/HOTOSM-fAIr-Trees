@@ -84,10 +84,14 @@ def write_oam_chip(tmp_path):
 
 
 class FakeSession:
-    """Stands in for onnxruntime.InferenceSession: background logits everywhere, optional planted logits."""
+    """Stands in for onnxruntime.InferenceSession: background logits everywhere, optional planted logits.
 
-    def __init__(self, planted=None):
-        self.planted = dict(planted or {})
+    ``planted`` maps an anchor index (class 0) or ``(anchor index, class)`` to a logit.
+    """
+
+    def __init__(self, planted=None, num_classes=1):
+        self.planted = {k if isinstance(k, tuple) else (k, 0): v for k, v in (planted or {}).items()}
+        self.num_classes = num_classes
         self.calls = []
 
     def get_inputs(self):
@@ -99,9 +103,9 @@ class FakeSession:
         batch = feeds["images"]
         self.calls.append(tuple(batch.shape))
         n = sum(len(a) for a in make_anchors(batch.shape[2], batch.shape[3]))
-        cls = np.full((1, n, 1), -10.0, np.float32)
-        for idx, logit in self.planted.items():
-            cls[0, idx, 0] = logit
+        cls = np.full((1, n, self.num_classes), -10.0, np.float32)
+        for (idx, k), logit in self.planted.items():
+            cls[0, idx, k] = logit
         return [cls, np.zeros((1, n, 4), np.float32)]
 
 
@@ -158,6 +162,8 @@ def write_region(tmp_path, write_oam_chip):
         fill=None,
         alpha=None,
         area=None,
+        groups_px=(),
+        classes=None,
     ):
         root = Path(root or tmp_path / "regions")
         d = root / region_id
@@ -175,6 +181,7 @@ def write_region(tmp_path, write_oam_chip):
                 count=3 if alpha is None else 4,
             )
         labels = feature_collection([box_polygon(b) for b in boxes_px], label=1)
+        labels["features"] += feature_collection([box_polygon(b) for b in groups_px], label=2)["features"]
         (d / "labels.geojson").write_text(json.dumps(labels))
         if ignore_px:
             (d / "ignore.geojson").write_text(
@@ -191,6 +198,8 @@ def write_region(tmp_path, write_oam_chip):
             "footprint": None if footprint_px is None else box_polygon(footprint_px),
             "valid_area_m2": float(area if area is not None else len(tiles) * tile_m**2),
         }
+        if classes is not None:
+            meta["classes"] = list(classes)
         (d / "region.json").write_text(json.dumps(meta))
         return d
 

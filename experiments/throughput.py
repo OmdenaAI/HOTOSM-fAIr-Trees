@@ -14,6 +14,7 @@ import time
 from collections.abc import Sequence
 from pathlib import Path
 
+import numpy as np
 import torch
 
 from fair_trees.dataset import plan_epoch
@@ -69,7 +70,9 @@ def _fixed_batch(cfg: TrainParams, device: torch.device):
         xy = torch.rand(GPU_BOXES_PER_IMAGE, 2, generator=gen) * (GPU_IMAGE_SIZE - 100)
         wh = torch.rand(GPU_BOXES_PER_IMAGE, 2, generator=gen) * 60 + 20
         boxes = torch.cat([xy, xy + wh], dim=1).numpy()
-        items.append((i, image, (GPU_IMAGE_SIZE, GPU_IMAGE_SIZE), boxes))
+        labels = np.zeros(len(boxes), np.int64)
+        unsupervised = np.zeros((1, GPU_IMAGE_SIZE, GPU_IMAGE_SIZE), bool)
+        items.append((i, image, (GPU_IMAGE_SIZE, GPU_IMAGE_SIZE), boxes, labels, unsupervised))
     batch = collate(items)
     targets = [{k: v.to(device) for k, v in t.items()} for t in batch.targets]
     return batch.images.to(device), batch.image_sizes, targets

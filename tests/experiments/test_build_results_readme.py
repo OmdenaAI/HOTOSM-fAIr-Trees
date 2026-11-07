@@ -45,6 +45,16 @@ def test_build_table(tmp_path):
     ]
 
 
+def test_part_without_ap40_shows_a_dash(tmp_path):
+    merged = _report(0.3, 0.2, 0.4)
+    del merged["ap40"]
+    _write(tmp_path, "hot-platform", {"run_id": "hot-platform", "parts": {"val_group_merged": merged}})
+    [line] = [line for line in build(tmp_path).splitlines() if line.startswith("| hot-")]
+    assert line == (
+        "| hot-platform | val_group_merged | 0.700 | 0.750 | 0.300 [0.200, 0.400] | – | 0.710 | 3 |"
+    )
+
+
 def test_check_mode(tmp_path):
     _write(tmp_path, "neon-release", _report(0.72, 0.69, 0.75))
     assert main(["--results", str(tmp_path), "--check"]) == 1
