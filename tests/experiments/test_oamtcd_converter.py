@@ -10,6 +10,7 @@ from rasterio.warp import transform_bounds
 
 from experiments.converters import oamtcd
 from fair_trees.dataset import load_regions
+from fair_trees.params import CLASSES
 
 pytest.importorskip("geopandas")
 
@@ -109,6 +110,17 @@ def test_tile_features_canopy_keeps_its_trees_unmasked():
     assert canopy["properties"]["reason"] == "canopy" and len(labels) == 1
     assert not _shape(canopy).contains(_lonlat(60, 60))  # the tree's centre
     assert _shape(canopy).contains(_lonlat(200, 200))
+
+
+def test_tile_features_canopy_as_groups():
+    anns = [_ann(1, (0, 0, 300, 300)), _ann(2, (50, 50, 20, 20)), _ann(2, (400, 0, 350, 10))]
+    _, as_ignore, _ = oamtcd.tile_features(anns, TRANSFORM, CRS, IDS)
+    labels, ignore, counts = oamtcd.tile_features(anns, TRANSFORM, CRS, IDS, canopy_as_groups=True)
+    tree, group = labels
+    assert tree["properties"]["label"] == 1 and group["properties"] == {"label": 2, "source": "oamtcd"}
+    assert group["geometry"] == as_ignore[1]["geometry"]  # the same canopy minus its trees
+    assert [f["properties"]["reason"] for f in ignore] == ["large_tree"]
+    assert counts["canopy"] == 1 and counts["ignore_px"] == pytest.approx(350 * 10)
 
 
 def test_tile_features_canopy_covered_by_trees_writes_nothing():
@@ -237,6 +249,28 @@ def test_convert_drops_mostly_masked_train_tiles_only(tmp_path):
     meta = json.loads((region.labels_path.parent / "region.json").read_text())
     assert meta["ignore_share"] == pytest.approx(0.9, abs=0.01)
     assert stats["regions_over_max_masked"] == {"train": 0, "val": 0, "test": 1}
+    assert region.classes == ("tree",) and stats["canopy_as"] == "ignore"
+
+
+def test_convert_canopy_as_groups(tmp_path):
+    canopy = [_ann(1, (0, 0, SIDE, int(SIDE * 0.9))), _ann(2, (100, 100, 40, 40))]
+    rows = [_row(1, fold=2, anns=canopy)]
+
+    stats = oamtcd.convert(
+        rows,
+        tmp_path / "oamtcd",
+        ids=IDS,
+        hot_bbox_4326=FAR_HOT,
+        work_dir=tmp_path / "w",
+        canopy_as_groups=True,
+    )
+
+    (region,) = load_regions(tmp_path / "oamtcd")  # a canopy tile is group data now, not mostly masked
+    assert region.classes == CLASSES and stats["dropped_mostly_masked"] == 0
+    labels = json.loads(region.labels_path.read_text())["features"]
+    assert sorted(f["properties"]["label"] for f in labels) == [1, 2]
+    assert all(f["properties"]["region"] == "oamtcd-by-1" for f in labels)
+    assert stats["canopy_as"] == "groups" and stats["canopy_masks"] == 1
 
 
 def test_convert_refuses_a_repeated_image_id(tmp_path):

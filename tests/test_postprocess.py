@@ -35,6 +35,17 @@ def test_classes_per_feature():
     ]
 
 
+def test_in_group_flag_only_where_given():
+    fc = to_feature_collection(
+        [ring(0, 0), ring(5, 5), ring(9, 9)],
+        np.array([0.5, 0.6, 0.7]),
+        classes=np.array([1, 1, 2]),
+        in_group=[True, False, None],
+    )
+    assert [f["properties"].get("in_group") for f in fc["features"]] == [True, False, None]
+    assert "in_group" not in fc["features"][2]["properties"]
+
+
 def test_empty():
     assert to_feature_collection([], np.zeros(0)) == {"type": "FeatureCollection", "features": []}
 

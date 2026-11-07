@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 from collections.abc import Mapping, Sequence
@@ -20,9 +21,13 @@ MAX_WINDOW_M = 200.0
 MAX_MOSAIC_PIXELS = 2**28  # 16384 x 16384 px, ~1 GiB of RGB + valid mask across one call's mosaics
 
 CLASSES = ("tree", "tree_group")  # head order; GeoJSON label and output class number = index + 1
+GROUP_MERGE_RULES = ("join", "overlap", "drop_edge")  # see decode.merge_group_detections
 
 INPUT_NAME = "images"
 OUTPUT_NAMES = ("cls_logits", "bbox_regression")
+THRESHOLDS_KEY = "fair_trees.confidence_thresholds"  # ONNX metadata: JSON {class name: val-picked threshold}
+WINDOWS_KEY = "fair_trees.windows_m"  # ONNX metadata: JSON {window field: metres the thresholds were picked}
+WINDOW_FIELDS = ("window_m", "group_window_m")
 
 
 @dataclass(frozen=True)
@@ -43,6 +48,18 @@ class InferenceParams:
     edge_band: float = 0.05
     min_valid_fraction: float = 0.2
     group_window_m: float = 120.0  # tree_group window; window_m is the tree window
+    # how group boxes cut by a window edge combine (GROUP_MERGE_RULES); drop_edge beat join by +0.08 group F1
+    # [0.06, 0.10] on HOT val
+    group_merge: str = "drop_edge"
+    # per class (CLASSES order), the model's own thresholds; a class not covered uses confidence_threshold.
+    # Set from the model's metadata by predict_session, never parsed from the caller's params.
+    class_thresholds: tuple[float, ...] = ()
+
+    def threshold(self, class_index: int) -> float:
+        """The decode threshold of a class."""
+        if class_index < len(self.class_thresholds):
+            return self.class_thresholds[class_index]
+        return self.confidence_threshold
 
 
 @dataclass(frozen=True)
@@ -177,15 +194,15 @@ def parse_split_params(hp: Mapping | None) -> SplitParams:
 def parse_inference_params(params: Mapping | None) -> InferenceParams:
     params = _as_mapping("inference params", params)
     aliases = {"confidence_threshold": ("score_thresh",), "nms_threshold": ("nms_thresh",)}
-    known = set(InferenceParams.__dataclass_fields__) | {a for v in aliases.values() for a in v}
-    _warn_unknown(params, known, "inference parameter")
+    fields = set(InferenceParams.__dataclass_fields__) - {"class_thresholds"}
+    _warn_unknown(params, fields | {a for v in aliases.values() for a in v}, "inference parameter")
     d = InferenceParams()
+    numbers = sorted(fields - {"group_merge"})
     p = InferenceParams(
-        **{
-            name: _field(params, name, getattr(d, name), float, aliases.get(name, ()))
-            for name in InferenceParams.__dataclass_fields__
-        }
+        **{name: _field(params, name, getattr(d, name), float, aliases.get(name, ())) for name in numbers},
+        group_merge=params.get("group_merge") or d.group_merge,
     )
+    _require("group_merge", p.group_merge in GROUP_MERGE_RULES, f"one of {GROUP_MERGE_RULES}", p.group_merge)
     _in_range("window_m", p.window_m, 5, MAX_WINDOW_M)
     _in_range("group_window_m", p.group_window_m, 5, MAX_WINDOW_M)
     _in_range("window_overlap", p.window_overlap, 0, 0.9)
@@ -194,6 +211,54 @@ def parse_inference_params(params: Mapping | None) -> InferenceParams:
     _in_range("edge_band", p.edge_band, 0, 0.5, hi_open=True)
     _in_range("min_valid_fraction", p.min_valid_fraction, 0, 1)
     return p
+
+
+def caller_sets_threshold(params: Mapping | None) -> bool:
+    """Whether the caller's inference params name a confidence threshold (canonical or alias)."""
+    return any((params or {}).get(k) is not None for k in ("confidence_threshold", "score_thresh"))
+
+
+def parse_class_thresholds(text: str | None) -> tuple[float, ...]:
+    """Per-class thresholds (CLASSES order) from a model's ``THRESHOLDS_KEY`` metadata; ``()`` when absent
+    or invalid (warned), so the model serves at ``confidence_threshold``. A class missing from the JSON
+    ends the tuple, and every class after it uses ``confidence_threshold`` too."""
+    if not text:
+        return ()
+    try:
+        picked = json.loads(text)
+        out = []
+        for name in CLASSES:
+            if name not in picked:
+                break
+            value = float(picked[name])
+            if not 0 <= value <= 1 or isinstance(picked[name], bool):
+                raise ValueError(f"{name}: {picked[name]!r} is not in [0, 1]")
+            out.append(value)
+    except (TypeError, ValueError) as e:  # json.JSONDecodeError is a ValueError
+        logger.warning(f"ignoring the model's confidence thresholds {text!r}: {e}")
+        return ()
+    return tuple(out)
+
+
+def parse_model_windows(text: str | None) -> dict[str, float]:
+    """The tree and group windows from a model's ``WINDOWS_KEY`` metadata; ``{}`` when absent or invalid
+    (warned), so the model serves at the default windows. Other keys are ignored."""
+    if not text:
+        return {}
+    try:
+        given = json.loads(text)
+        out = {}
+        for name in WINDOW_FIELDS:
+            if name not in given:
+                continue
+            value = given[name]
+            if isinstance(value, bool) or not 5 <= float(value) <= MAX_WINDOW_M:
+                raise ValueError(f"{name}: {value!r} is not in [5, {MAX_WINDOW_M:g}] m")
+            out[name] = float(value)
+    except (TypeError, ValueError) as e:  # json.JSONDecodeError is a ValueError
+        logger.warning(f"ignoring the model's windows {text!r}: {e}")
+        return {}
+    return out
 
 
 def _parse_crop_m(value: Any, default: tuple[float, float]) -> tuple[float, float]:

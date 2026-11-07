@@ -2,8 +2,9 @@
 
 import argparse
 import io
+import json
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import onnx
@@ -11,7 +12,7 @@ import torch
 from torch import nn
 from torchvision.models.detection import RetinaNet
 
-from fair_trees.params import INPUT_NAME, OUTPUT_NAMES
+from fair_trees.params import INPUT_NAME, OUTPUT_NAMES, THRESHOLDS_KEY, WINDOWS_KEY
 from fair_trees.train import build_model
 
 OPSET = 17
@@ -30,8 +31,18 @@ class _RawHead(nn.Module):
         return out["cls_logits"], out["bbox_regression"]
 
 
-def export_onnx_bytes(model: RetinaNet, *, opset: int = OPSET) -> bytes:
-    """Export the raw network with dynamic H, W and anchor count; returns the ONNX file bytes."""
+def export_onnx_bytes(
+    model: RetinaNet,
+    *,
+    opset: int = OPSET,
+    thresholds: Mapping[str, float] | None = None,
+    windows: Mapping[str, float] | None = None,
+) -> bytes:
+    """Export the raw network with dynamic H, W and anchor count; returns the ONNX file bytes.
+
+    ``thresholds`` (class name -> val-picked threshold, as train writes ``thresholds.json``) travel in the
+    model's metadata under ``THRESHOLDS_KEY``, and ``windows`` (the val windows they were picked at, as
+    ``windows.json``) under ``WINDOWS_KEY``; ``predict_session`` reads both."""
     wrapper = _RawHead(model).eval().cpu()
     dummy = torch.zeros(1, 3, 800, 800)
     buf = io.BytesIO()
@@ -54,9 +65,25 @@ def export_onnx_bytes(model: RetinaNet, *, opset: int = OPSET) -> bytes:
             opset_version=opset,
             dynamo=False,
         )
-    data = buf.getvalue()
-    onnx.checker.check_model(onnx.load_from_string(data))
-    return data
+    proto = onnx.load_from_string(buf.getvalue())
+    for key, values in ((THRESHOLDS_KEY, thresholds), (WINDOWS_KEY, windows)):
+        if values:
+            entry = proto.metadata_props.add()
+            entry.key, entry.value = key, json.dumps({k: float(v) for k, v in values.items()})
+    onnx.checker.check_model(proto)
+    return proto.SerializeToString()
+
+
+def checkpoint_thresholds(checkpoint: Path) -> dict[str, float] | None:
+    """The ``thresholds.json`` training wrote beside a checkpoint, or None."""
+    path = Path(checkpoint).with_name("thresholds.json")
+    return json.loads(path.read_text()) if path.exists() else None
+
+
+def checkpoint_windows(checkpoint: Path) -> dict[str, float] | None:
+    """The ``windows.json`` (val windows the thresholds were picked at) beside a checkpoint, or None."""
+    path = Path(checkpoint).with_name("windows.json")
+    return json.loads(path.read_text()) if path.exists() else None
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -65,7 +92,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("out", type=Path)
     args = parser.parse_args(argv)
     model = build_model(args.checkpoint, trainable_layers=0)
-    data = export_onnx_bytes(model)
+    data = export_onnx_bytes(
+        model,
+        thresholds=checkpoint_thresholds(args.checkpoint),
+        windows=checkpoint_windows(args.checkpoint),
+    )
     args.out.write_bytes(data)
     print(f"{args.out} ({len(data)} bytes)")
 

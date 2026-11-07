@@ -10,6 +10,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from fair_trees.params import GROUP_MERGE_RULES
 from fair_trees.preprocess import Window, WindowScale
 
 TOPK_CANDIDATES = 1000
@@ -212,15 +213,25 @@ def drop_edge_boxes(dets: Detections, window: Window, interior: set[str], band: 
     return Detections(dets.boxes[keep], dets.scores[keep])
 
 
-def merge_group_detections(
-    parts: Sequence[tuple[Detections, np.ndarray]], iou_threshold: float
-) -> Detections:
-    """Join tree_group boxes cut by window edges, then NMS.
+JOIN_MIN_OVERLAP = 0.5  # "overlap" rule: intersection over the smaller box's area
 
-    ``parts`` holds each window's boxes (mosaic pixels) and whether each is cut (``cut_boxes``). A cut box
-    joins every box of another window it overlaps, transitively; a joined set becomes its union extent with
-    the highest score.
+
+def merge_group_detections(
+    parts: Sequence[tuple[Detections, np.ndarray]], iou_threshold: float, rule: str = "drop_edge"
+) -> Detections:
+    """Join or drop tree_group boxes cut by window edges, then NMS.
+
+    ``parts`` holds each window's boxes (mosaic pixels) and whether each is cut (``cut_boxes``). With
+    ``join`` a cut box joins every box of another window it overlaps, transitively; with ``overlap`` only
+    those sharing more than ``JOIN_MIN_OVERLAP`` of the smaller box; a joined set becomes its union extent
+    with the highest score. ``drop_edge`` drops cut boxes, as trees do.
     """
+    if rule not in GROUP_MERGE_RULES:
+        raise ValueError(f"group_merge must be one of {GROUP_MERGE_RULES}, got {rule!r}")
+    if rule == "drop_edge":
+        uncut = [(d, ~np.asarray(c, bool)) for d, c in parts]
+        kept = concat_detections([Detections(d.boxes[k], d.scores[k]) for d, k in uncut])
+        return merge_window_detections(kept, iou_threshold)
     dets = concat_detections([d for d, _ in parts])
     if not len(dets.scores):
         return Detections.empty()
@@ -235,10 +246,14 @@ def merge_group_detections(
             i = parent[i]
         return i
 
+    area = (b[:, 2] - b[:, 0]) * (b[:, 3] - b[:, 1])
     for i in np.flatnonzero(cut):  # one row at a time: memory stays linear in the box count
         iw = np.minimum(b[i, 2], b[:, 2]) - np.maximum(b[i, 0], b[:, 0])
         ih = np.minimum(b[i, 3], b[:, 3]) - np.maximum(b[i, 1], b[:, 1])
-        for j in np.flatnonzero((iw > 0) & (ih > 0) & (window != window[i])):
+        joins = (iw > 0) & (ih > 0) & (window != window[i])
+        if rule == "overlap":
+            joins &= iw * ih > JOIN_MIN_OVERLAP * np.minimum(area[i], area)
+        for j in np.flatnonzero(joins):
             parent[find(j)] = find(i)
     roots = np.array([find(i) for i in range(len(b))], np.int64)
     _, member_of = np.unique(roots, return_inverse=True)
@@ -268,6 +283,15 @@ def filter_score(dets: Detections, threshold: float) -> Detections:
     """Keep scores strictly greater than the threshold."""
     keep = dets.scores > threshold
     return Detections(dets.boxes[keep], dets.scores[keep])
+
+
+def centres_inside(boxes: np.ndarray, regions: np.ndarray) -> np.ndarray:
+    """(N,) bool: whether each xyxy box's centre lies inside any of the xyxy regions, edges inclusive."""
+    b = np.asarray(boxes, np.float64).reshape(-1, 4)
+    r = np.asarray(regions, np.float64).reshape(-1, 4)
+    cx, cy = (b[:, None, 0] + b[:, None, 2]) / 2, (b[:, None, 1] + b[:, None, 3]) / 2
+    inside = (cx >= r[None, :, 0]) & (cx <= r[None, :, 2]) & (cy >= r[None, :, 1]) & (cy <= r[None, :, 3])
+    return inside.any(axis=1)
 
 
 def concat_detections(parts: Sequence[Detections]) -> Detections:

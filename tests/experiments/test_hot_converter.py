@@ -143,6 +143,16 @@ def test_regions_follow_blocks_and_skip_test(tmp_path):
     assert all(len(r.chips[20]) == 1 and r.ignore_path is not None for r in regions)
 
 
+def test_test_split_converts_on_its_own(tmp_path):
+    out, stats, images = run(tmp_path, splits={"test": "test"})
+    [region] = load_regions(out)
+    assert region.id == "hot-test-485903-499600-0" and region.split == "test"
+    assert images.asked == ["test"]
+    labels = json.loads((out / region.id / "labels.geojson").read_text())["features"]
+    assert sorted(f["properties"]["label"] for f in labels) == [1, 2]  # tree 9 and the D group
+    assert stats["regions"] == {"test": 1} and stats["val_share"] == 0.0
+
+
 def test_chips_are_the_region_tiles(tmp_path):
     out, _, _ = run(tmp_path)
     for name, region_id in REGION.items():

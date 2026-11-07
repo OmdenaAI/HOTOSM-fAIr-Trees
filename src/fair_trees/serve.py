@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import NamedTuple
 
@@ -9,6 +10,7 @@ import numpy as np
 
 from fair_trees.decode import (
     Detections,
+    centres_inside,
     concat_detections,
     cut_boxes,
     decode_retinanet_output,
@@ -19,7 +21,17 @@ from fair_trees.decode import (
     window_to_mosaic,
 )
 from fair_trees.georef import mosaic_px_to_4326_rings
-from fair_trees.params import CLASSES, OUTPUT_NAMES, InferenceParams, parse_inference_params
+from fair_trees.params import (
+    CLASSES,
+    OUTPUT_NAMES,
+    THRESHOLDS_KEY,
+    WINDOWS_KEY,
+    InferenceParams,
+    caller_sets_threshold,
+    parse_class_thresholds,
+    parse_inference_params,
+    parse_model_windows,
+)
 from fair_trees.postprocess import to_feature_collection
 from fair_trees.preprocess import (
     Mosaic,
@@ -85,7 +97,7 @@ def _decode(run: _WindowRun, params: InferenceParams, class_index: int) -> Detec
         run.reg,
         run.input_hw,
         (run.scale.resized_height, run.scale.resized_width),
-        params.confidence_threshold,
+        params.threshold(class_index),
         params.nms_threshold,
         class_index,
     )
@@ -131,7 +143,7 @@ def predict_mosaic_classes(
     return [
         merge_window_detections(concat_detections(trees), params.iou_threshold)
         if c == 0
-        else merge_group_detections(groups, params.iou_threshold)
+        else merge_group_detections(groups, params.iou_threshold, params.group_merge)
         for c in wanted(seen_k)
     ]
 
@@ -161,6 +173,12 @@ def _window_count(mosaics: list[Mosaic], params: InferenceParams) -> int:
     )
 
 
+def _metadata(session) -> Mapping[str, str]:
+    """The ONNX model's custom metadata; empty for a session that exposes none."""
+    get = getattr(session, "get_modelmeta", None)
+    return dict(get().custom_metadata_map) if get is not None else {}
+
+
 def predict_session(
     session,
     input_images: Path,
@@ -168,8 +186,17 @@ def predict_session(
     bbox: tuple[float, float, float, float] | None = None,
 ) -> dict:
     """Predict crowns (class 1) and, for a two-class model, tree groups (class 2) for a chip file or
-    directory of chips and return a GeoJSON FeatureCollection."""
+    directory of chips and return a GeoJSON FeatureCollection.
+
+    Unless the caller names a confidence threshold, each class is served at the threshold the model's
+    fine-tune picked on val (ONNX metadata ``THRESHOLDS_KEY``), else at the default. Likewise a tree or
+    group window the caller leaves unset is the one those thresholds were picked at (``WINDOWS_KEY``)."""
     p = parse_inference_params(params)
+    meta = _metadata(session)
+    if not caller_sets_threshold(params):
+        p = replace(p, class_thresholds=parse_class_thresholds(meta.get(THRESHOLDS_KEY)))
+    windows = parse_model_windows(meta.get(WINDOWS_KEY))
+    p = replace(p, **{k: v for k, v in windows.items() if (params or {}).get(k) is None})
     input_images = Path(input_images)
     paths = [input_images] if input_images.is_file() else sorted(input_images.iterdir())
     skipped: list[tuple[str, str]] = []
@@ -193,11 +220,21 @@ def predict_session(
     rings: list = []
     scores: list = []
     classes: list = []
+    in_group: list = []  # a two-class model's trees: whether a served group box covers the centre
     for m in mosaics:
-        for c, d in enumerate(predict_mosaic_classes(run, m, p)):
+        per_class = predict_mosaic_classes(run, m, p)
+        for c, d in enumerate(per_class):
             rings.extend(mosaic_px_to_4326_rings(d.boxes, m))
             scores.extend(d.scores)
             classes.extend([c + 1] * len(d.scores))
+            if c == 0 and len(per_class) > 1:
+                in_group.extend(centres_inside(d.boxes, per_class[1].boxes).tolist())
+            else:
+                in_group.extend([None] * len(d.scores))
     return to_feature_collection(
-        rings, np.asarray(scores, np.float32), bbox=bbox, classes=np.asarray(classes, np.int64)
+        rings,
+        np.asarray(scores, np.float32),
+        bbox=bbox,
+        classes=np.asarray(classes, np.int64),
+        in_group=in_group,
     )

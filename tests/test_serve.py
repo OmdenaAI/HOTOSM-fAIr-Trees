@@ -1,3 +1,4 @@
+import json
 import logging
 import shutil
 
@@ -6,7 +7,7 @@ import pytest
 from pyproj import Transformer
 
 from fair_trees.georef import tile_bounds_3857
-from fair_trees.params import InferenceParams
+from fair_trees.params import THRESHOLDS_KEY, WINDOWS_KEY, InferenceParams
 from fair_trees.preprocess import mosaic_chips, window_grid
 from fair_trees.serve import ort_run_fn, predict_mosaic, predict_mosaic_classes, predict_session
 
@@ -53,6 +54,81 @@ def test_k2_session_emits_both_classes(write_oam_chip, fake_session, tmp_path):
         (2, 0.982),
     ]
     assert len(s.calls) == 1  # the 40 m and 120 m windows both clamp to the one tile: run once
+
+
+def _k2_with_thresholds(fake_session, thresholds):
+    meta = {THRESHOLDS_KEY: json.dumps(thresholds)} if thresholds is not None else {}
+    planted = {(CENTRE_ANCHOR_800, 0): 5.0, (CENTRE_ANCHOR_800, 1): 4.0}  # scores 0.9933 and 0.982
+    return fake_session(planted, num_classes=2, metadata=meta)
+
+
+def _classes(fc):
+    return sorted(f["properties"]["class"] for f in fc["features"])
+
+
+def test_model_thresholds_apply_per_class(write_oam_chip, fake_session, tmp_path):
+    write_oam_chip()
+    s = _k2_with_thresholds(fake_session, {"tree": 0.995, "tree_group": 0.5})
+    assert _classes(predict_session(s, tmp_path, {})) == [2]
+    s = _k2_with_thresholds(fake_session, {"tree": 0.5, "tree_group": 0.99})
+    assert _classes(predict_session(s, tmp_path, None)) == [1]
+
+
+def test_caller_threshold_overrides_the_model(write_oam_chip, fake_session, tmp_path):
+    write_oam_chip()
+    s = _k2_with_thresholds(fake_session, {"tree": 0.995, "tree_group": 0.995})
+    assert _classes(predict_session(s, tmp_path, {"confidence_threshold": 0.1})) == [1, 2]
+    assert _classes(predict_session(s, tmp_path, {"score_thresh": 0.1})) == [1, 2]
+    assert _classes(predict_session(s, tmp_path, {"confidence_threshold": 0.99})) == [1]
+
+
+def test_model_without_or_with_bad_thresholds_serves_at_the_default(
+    write_oam_chip, fake_session, tmp_path, caplog
+):
+    write_oam_chip()
+    assert _classes(predict_session(_k2_with_thresholds(fake_session, None), tmp_path, {})) == [1, 2]
+    with caplog.at_level(logging.WARNING):
+        fc = predict_session(_k2_with_thresholds(fake_session, {"tree": 7}), tmp_path, {})
+    assert _classes(fc) == [1, 2] and "thresholds" in caplog.text
+    s = _k2_with_thresholds(fake_session, {"tree": 0.995})  # a class it lacks keeps the default
+    assert _classes(predict_session(s, tmp_path, {})) == [2]
+
+
+def test_model_windows_apply_unless_the_caller_sets_them(write_oam_chip, fake_session, tmp_path):
+    for i in range(4):
+        for j in range(4):
+            write_oam_chip(X0 + i, Y0 + j)
+
+    def windows_run(metadata, params):
+        s = fake_session({CENTRE_ANCHOR_800: 5.0}, metadata=metadata)
+        predict_session(s, tmp_path, params)
+        return len(s.calls)
+
+    model = {WINDOWS_KEY: json.dumps({"window_m": 80.0, "group_window_m": 120.0})}
+    assert windows_run(model, {}) == windows_run({}, {"window_m": 80}) < windows_run({}, {})
+    assert windows_run(model, {"window_m": 40}) == windows_run({}, {})
+
+
+def test_trees_centred_in_a_served_group_are_tagged(write_oam_chip, fake_session, tmp_path):
+    write_oam_chip()
+    fc = predict_session(_k2_with_thresholds(fake_session, None), tmp_path, {})
+    tags = {f["properties"]["class"]: f["properties"].get("in_group") for f in fc["features"]}
+    assert tags == {1: True, 2: None}  # the planted group box covers the planted tree's centre
+    s = _k2_with_thresholds(fake_session, {"tree": 0.5, "tree_group": 0.99})
+    [tree] = predict_session(s, tmp_path, {})["features"]
+    assert tree["properties"]["in_group"] is False  # no group served at its threshold
+    [k1] = predict_session(fake_session({CENTRE_ANCHOR_800: 5.0}), tmp_path, {})["features"]
+    assert "in_group" not in k1["properties"]
+
+
+def test_centres_inside():
+    from fair_trees.decode import centres_inside
+
+    trees = np.array([[0, 0, 10, 10], [20, 20, 30, 30], [50, 50, 54, 54]], np.float32)
+    groups = np.array([[0, 0, 25, 25], [52, 52, 60, 60]], np.float32)
+    assert centres_inside(trees, groups).tolist() == [True, True, True]
+    assert centres_inside(trees, groups[:1]).tolist() == [True, True, False]
+    assert centres_inside(trees, np.zeros((0, 4), np.float32)).tolist() == [False, False, False]
 
 
 def test_k2_session_without_groups_gives_trees_only(write_oam_chip, fake_session, tmp_path):

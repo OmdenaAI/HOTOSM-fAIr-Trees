@@ -97,8 +97,8 @@ shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
 
 ### What is converted
 
-- **Splits.** Only HOT `train` (as `train`) and `validation` (as `val`). HOT `test` is never converted; the label study
-  reads it straight from Hugging Face.
+- **Splits.** Only HOT `train` (as `train`) and `validation` (as `val`). HOT `test` is converted only on its own, as
+  the `hot-test` benchmark part (below); the label study reads it straight from Hugging Face.
 - **Regions.** One region per connected run of tiles in a 16 x 16-tile block, since a whole split is larger than the
   mosaic limit. Each region keeps its chips (PNG or JPEG as stored) and its own `labels.geojson` and `ignore.geojson`;
   every feature that touches the region's tiles is written, so a crown cut by a block edge is labelled on both sides.
@@ -139,6 +139,24 @@ shapefile already on Drive (`raw/resolve/Ecoregions2017.zip`).
 - Drive-to-`/content` copy of `z20-0000.tar`: 271.8 MB/s.
 - The tree-only val score is unchanged: `hot-platform-joint0.3`'s best weights score val F1 0.550 on these shards, as
   on the old ones.
+
+### HOT test as a held-out benchmark part (2026-11-01, converter 021df84310fde6363dbfe4eea093676b21e0167f)
+
+Converted on its own (`colab_convert_hot.ipynb` with `CONVERT_TEST = True`, `splits=TEST_SPLITS`) to
+`MyDrive/fair_trees/shards/hot-test/`, with the same rules as above; crowns and groups of train and val that reach
+into a test region are masked there. Never trained on.
+
+| Split | Regions | Chips | Label-free tiles |
+| --- | --- | --- | --- |
+| test | 35 | 5,627 | 32.0% |
+
+- 10,090 crown boxes, 771 group labels; 114 unknown-diameter trees, 27 crowns and 10 groups from other splits
+  masked; 136 trees inside groups left out. One biome (Tropical & Subtropical Moist Broadleaf Forests).
+- Shard manifest sha256 `6cfdc5b92ab68795c707fb951953dc87b3aeca8a5510a2f879dbfc1cedf46b0a`.
+- Drive-to-`/content` copy of `z20-0000.tar`: 520.3 MB/s.
+- Benchmark part `hot-test` (35 units, report-only, 60 m tree and 120 m group windows) frozen in
+  `experiments/benchmark.json` from the notebook's `benchmark_part_hot-test.json`; a two-class model also gets
+  `hot-test_group`. Stage it with `"hot-test"` in the train notebook's `SOURCES`.
 
 ### Teacher-masked HOT sets (2026-10-28, code 4d069e25acd19575c35ebe0373fe02ff3cd97766)
 

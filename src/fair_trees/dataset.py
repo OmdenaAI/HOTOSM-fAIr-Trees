@@ -97,7 +97,8 @@ def _exterior_ring(part: list) -> tuple[np.ndarray, str | None]:
 
 def label_rings(geojson: dict, label: int = 1) -> list[np.ndarray]:
     """Exterior rings of the labels of class ``label`` (1 tree, 2 tree_group) as (k, 2) float64 lon/lat
-    arrays, one per polygon part.
+    arrays, one per polygon part for trees. A tree_group is one group however many parts it has (canopy
+    minus the crowns inside can fall apart), so its parts' rings are stacked into one array per feature.
 
     Features of another class are dropped silently; empty, unsupported and invalid geometries are skipped
     with a warning.
@@ -118,12 +119,16 @@ def label_rings(geojson: dict, label: int = 1) -> list[np.ndarray]:
         else:
             logger.warning(f"label feature {i}: unsupported geometry type {kind}, skipped")
             continue
+        feature_rings = []
         for part in parts:
             ring, why = _exterior_ring(part)
             if why:
                 logger.warning(f"label feature {i}: invalid geometry ({why}), skipped")
                 continue
-            rings.append(ring)
+            feature_rings.append(ring)
+        if label == 2 and feature_rings:
+            feature_rings = [np.concatenate(feature_rings)]
+        rings.extend(feature_rings)
     return rings
 
 

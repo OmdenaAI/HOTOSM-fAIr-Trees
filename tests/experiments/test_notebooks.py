@@ -52,6 +52,12 @@ REQUIRED = {
         "run.evaluate",
         "run.export",
         "run.compare_runs",
+        "picked=True",
+        "run.compare_group_merges",
+        "import_retinanet",
+        "window_m=",
+        "run_recall_check",
+        "run_small_crowns",
         "flush_and_unmount",
     ],
     "colab_convert_oamtcd.ipynb": [

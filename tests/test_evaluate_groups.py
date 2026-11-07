@@ -31,7 +31,7 @@ def _one_confident_window(n_windows):
 
 def test_group_eval_matches_serving_at_its_threshold(write_oam_chip):
     [m] = mosaic_chips([write_oam_chip(X0 + i, Y0 + j) for i in range(8) for j in range(4)])
-    params = InferenceParams(confidence_threshold=0.5)
+    params = InferenceParams(confidence_threshold=0.5, group_merge="join")
     n_windows = len(window_grid(*m.rgb.shape[:2], m.gsd_m, params.group_window_m, params.window_overlap))
     run = _one_confident_window(n_windows)
     [served] = predict_mosaic_classes(run, m, params, (1,))

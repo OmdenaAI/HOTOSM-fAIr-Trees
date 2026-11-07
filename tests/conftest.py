@@ -89,13 +89,17 @@ class FakeSession:
     ``planted`` maps an anchor index (class 0) or ``(anchor index, class)`` to a logit.
     """
 
-    def __init__(self, planted=None, num_classes=1):
+    def __init__(self, planted=None, num_classes=1, metadata=None):
         self.planted = {k if isinstance(k, tuple) else (k, 0): v for k, v in (planted or {}).items()}
         self.num_classes = num_classes
+        self.metadata = dict(metadata or {})
         self.calls = []
 
     def get_inputs(self):
         return [SimpleNamespace(name="images")]
+
+    def get_modelmeta(self):
+        return SimpleNamespace(custom_metadata_map=self.metadata)
 
     def run(self, output_names, feeds):
         from fair_trees.decode import make_anchors

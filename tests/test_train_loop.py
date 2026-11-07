@@ -231,6 +231,28 @@ def test_fine_tune_keeps_k1_unless_asked(monkeypatch, write_oam_chip, geo, weigh
         assert T.checkpoint_num_classes(state) == k
 
 
+def test_fine_tune_crops_up_to_80_m_for_one_or_two_classes(
+    monkeypatch, write_oam_chip, geo, weights, tmp_path
+):
+    # 120 m crops for a two-class model cost 0.017 tree F1 on held-out HOT test against 80 m
+    # (paired [+0.008, +0.026]) for -0.01 to -0.02 group F1, so both class counts keep the 80 m default.
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(2)]
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps(geo.feature_collection([geo.box_polygon((5, 5, 15, 15))])))
+    seen = []
+    monkeypatch.setattr(T, "train", lambda cfg, *a, **k: seen.append(cfg.augment.crop_m))
+    k2 = tmp_path / "k2.pt"
+    torch.save(T.build_model(None, trainable_layers=0, num_classes=2).state_dict(), k2)
+    for hp, start in (
+        ({}, weights),
+        ({"num_classes": 2}, weights),
+        ({}, k2),
+        ({"num_classes": 2, "augment": {"crop_m": [30, 60]}}, weights),
+    ):
+        T.fine_tune(chips[:1], chips[1:], labels, hp, weights=start, out_dir=tmp_path / "ft")
+    assert seen == [(30.0, 80.0), (30.0, 80.0), (30.0, 80.0), (30.0, 60.0)]
+
+
 def test_two_classes_without_group_labels_are_refused(monkeypatch, regions, weights, tmp_path):
     script = Script([0.1])
     cfg = dataclasses.replace(CFG, num_classes=2)
@@ -309,7 +331,12 @@ def _stub_reports(monkeypatch, by_source):
         calls.append([u.meta["source"] for u in units])
         source = units[0].meta["source"]
         f1, ap = by_source.get((source, class_index)) or by_source[source]
-        return SimpleNamespace(f1_max=f1, conf_at_max=0.3, ap40=ap, aoi_f1=f1)
+        picks = {"big": 0.25, "big2": 0.25, "mid": 0.225}  # sources with enough boxes to pick
+        pick_sweep = [{"threshold": picks[source], "f1": f1}] if source in picks else []
+        rows = [{"tp": 300, "fn": 0}] if source in picks else []
+        return SimpleNamespace(
+            f1_max=f1, conf_at_max=0.3, ap40=ap, aoi_f1=f1, units=rows, pick_sweep=pick_sweep
+        )
 
     monkeypatch.setattr(T, "evaluate_units", fake_evaluate_units)
     return calls
@@ -340,8 +367,9 @@ def test_validate_single_source_unchanged(monkeypatch):
     )
 
     assert calls == [["a", "a"]]
-    assert set(v) == {"f1_max", "conf_at_max", "ap40", "aoi_f1", "seconds"}
+    assert set(v) == {"f1_max", "conf_at_max", "ap40", "aoi_f1", "seconds", "threshold_tree"}
     assert v["f1_max"] == 0.7
+    assert v["threshold_tree"] == 0.15  # no ground truth to pick from: the one-class prior
 
 
 def test_validate_means_over_source_and_class(monkeypatch):
@@ -353,3 +381,36 @@ def test_validate_means_over_source_and_class(monkeypatch):
     assert v["f1_max"] == pytest.approx(0.4) and v["ap40"] == pytest.approx(0.3)
     assert v["f1_max_hot"] == 0.6 and v["f1_max_hot_tree_group"] == 0.2 and v["ap40_hot_tree_group"] == 0.1
     assert sorted(calls) == [["hot"], ["hot", "hot"]]
+
+
+def test_validate_picks_a_threshold_per_class(monkeypatch):
+    _stub_reports(monkeypatch, {"big": (0.6, 0.5), "small": (0.4, 0.3)})
+    units = {"tree": _units("big", "small"), "tree_group": _units("small")}
+
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    # trees: a pick (0.25) from the large source and the two-class prior (0.2) from the small one, averaged
+    assert v["threshold_tree"] == pytest.approx(0.225) and v["threshold_tree_group"] == 0.2
+
+
+def test_validate_snaps_the_mean_pick_to_the_grid(monkeypatch):
+    _stub_reports(monkeypatch, {"big": (0.6, 0.5), "big2": (0.6, 0.5), "mid": (0.6, 0.5)})
+    units = {"tree": _units("big", "big2", "mid")}
+
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    # mean(0.25, 0.25, 0.225) = 0.2417: served, exported and reported at the nearest grid point
+    assert v["threshold_tree"] == 0.25
+
+
+def test_best_epoch_thresholds_are_saved(monkeypatch, regions, weights, tmp_path):
+    script = Script([0.5, 0.6, 0.55])
+    validate = script.validate
+    script.validate = lambda model, device, units, params, epoch: (
+        validate(model, device, units, params, epoch) | {"threshold_tree": 0.1 + 0.05 * epoch}
+    )
+    res = _run(monkeypatch, script, regions, weights, tmp_path / "run")
+    assert res.thresholds == {"tree": pytest.approx(0.15)}
+    assert json.loads((tmp_path / "run" / "thresholds.json").read_text()) == {"tree": pytest.approx(0.15)}
+    windows = {"window_m": 40.0, "group_window_m": 120.0}  # the val windows the thresholds were picked at
+    assert json.loads((tmp_path / "run" / "windows.json").read_text()) == windows

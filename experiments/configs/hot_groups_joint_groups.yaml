@@ -1,0 +1,28 @@
+# hot_groups.yaml started from the 0.3 blend of the release weights and the two-class joint base
+# (joint_base_groups.yaml) instead of the tree-only joint base's: the same HOT fine-tune, so the two runs
+# differ only in whether the group class was pretrained on OAM-TCD canopy.
+weights: runs/joint-base-groups-wise-0.3/weights.pt  # relative to the Drive root
+sources: [hot]
+hyperparameters:
+  num_classes: 2
+  trainable_layers: 0
+  learning_rate: 0.001
+  momentum: 0.9
+  weight_decay: 0.0001
+  l2sp_alpha: 0.0
+  epochs: 10
+  patience: 3
+  min_delta: 0.005
+  batch_size: 4
+  samples_per_epoch: null         # one epoch = the number of train chips, as on the platform
+  schedule: cosine
+  amp: true
+  seed: 42
+  augment:
+    crop_m: [30, 120]
+val:
+  zooms: [20, 19]
+  max_regions: null
+  window_m: 60                    # the tree window hot_platform.yaml and its weight blends were scored at
+  group_window_m: 120
+mlflow: true

@@ -10,9 +10,21 @@ from fair_trees.params import (
     SplitParams,
     TrainParams,
     parse_inference_params,
+    parse_model_windows,
     parse_split_params,
     parse_train_params,
 )
+
+
+def test_model_windows_parse_or_are_ignored(caplog):
+    assert parse_model_windows(None) == {}
+    text = '{"window_m": 60, "group_window_m": 120, "other": 1}'
+    assert parse_model_windows(text) == {"window_m": 60.0, "group_window_m": 120.0}
+    with caplog.at_level(logging.WARNING):
+        assert parse_model_windows('{"window_m": 1000}') == {}
+        assert parse_model_windows("not json") == {}
+        assert parse_model_windows('{"window_m": true}') == {}
+    assert caplog.text.count("windows") == 3
 
 
 @pytest.mark.parametrize("value", [None, {}])
@@ -89,6 +101,14 @@ def test_group_window_param():
     for bad in (4, 201):
         with pytest.raises(ValueError, match="group_window_m"):
             parse_inference_params({"group_window_m": bad})
+
+
+def test_group_merge_param():
+    assert InferenceParams().group_merge == "drop_edge"
+    for rule in ("join", "overlap", "drop_edge"):
+        assert parse_inference_params({"group_merge": rule}).group_merge == rule
+    with pytest.raises(ValueError, match="group_merge"):
+        parse_inference_params({"group_merge": "glue"})
 
 
 def test_split_params():
