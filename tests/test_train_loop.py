@@ -2,6 +2,7 @@ import csv
 import dataclasses
 import json
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -207,6 +208,59 @@ def test_fine_tune_on_fair_chips(monkeypatch, write_oam_chip, geo, weights, tmp_
     assert res.history[0]["sampler/draws/zoom/22"] == 3.0
 
 
+def test_fine_tune_keeps_k1_unless_asked(monkeypatch, write_oam_chip, geo, weights, tmp_path):
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(3)]
+    labels = tmp_path / "labels.geojson"
+    fc = geo.feature_collection([geo.box_polygon((5, 5, 15, 15))])
+    fc["features"] += geo.feature_collection([geo.box_polygon((40, 40, 90, 90))], label=2)["features"]
+    labels.write_text(json.dumps(fc))
+    monkeypatch.setattr(T, "_validate", Script([0.2]).validate)
+    hp = {"epochs": 1, "batch_size": 2, "samples_per_epoch": 2, "amp": False}
+    for name, extra, k in (("k1", {}, 1), ("k2", {"num_classes": 2}, 2)):
+        res = T.fine_tune(
+            chips[:2],
+            chips[2:],
+            labels,
+            hp | extra,
+            weights=weights,
+            out_dir=tmp_path / name,
+            num_workers=0,
+            tmp_dir=tmp_path / "tmp",
+        )
+        state = torch.load(res.best_checkpoint, weights_only=True)
+        assert T.checkpoint_num_classes(state) == k
+
+
+def test_fine_tune_crops_up_to_80_m_for_one_or_two_classes(
+    monkeypatch, write_oam_chip, geo, weights, tmp_path
+):
+    # 120 m crops for a two-class model cost 0.017 tree F1 on held-out HOT test against 80 m
+    # (paired [+0.008, +0.026]) for -0.01 to -0.02 group F1, so both class counts keep the 80 m default.
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(2)]
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps(geo.feature_collection([geo.box_polygon((5, 5, 15, 15))])))
+    seen = []
+    monkeypatch.setattr(T, "train", lambda cfg, *a, **k: seen.append(cfg.augment.crop_m))
+    k2 = tmp_path / "k2.pt"
+    torch.save(T.build_model(None, trainable_layers=0, num_classes=2).state_dict(), k2)
+    for hp, start in (
+        ({}, weights),
+        ({"num_classes": 2}, weights),
+        ({}, k2),
+        ({"num_classes": 2, "augment": {"crop_m": [30, 60]}}, weights),
+    ):
+        T.fine_tune(chips[:1], chips[1:], labels, hp, weights=start, out_dir=tmp_path / "ft")
+    assert seen == [(30.0, 80.0), (30.0, 80.0), (30.0, 80.0), (30.0, 60.0)]
+
+
+def test_two_classes_without_group_labels_are_refused(monkeypatch, regions, weights, tmp_path):
+    script = Script([0.1])
+    cfg = dataclasses.replace(CFG, num_classes=2)
+    with pytest.raises(ValueError, match="tree_group"):
+        _run(monkeypatch, script, regions, weights, tmp_path / "run", cfg=cfg)
+    assert script.calls == 0 and not (tmp_path / "run").exists()
+
+
 def test_fine_tune_refuses_to_resume_on_changed_data(monkeypatch, write_oam_chip, geo, weights, tmp_path):
     chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(4)]
     labels = tmp_path / "labels.geojson"
@@ -267,3 +321,96 @@ def test_resume_without_a_readable_checkpoint_is_refused(monkeypatch, regions, w
     with pytest.raises(RuntimeError, match="no readable checkpoint"):
         _run(monkeypatch, script, regions, weights, out)
     assert script.calls == 0 and {p.name: p.read_bytes() for p in out.iterdir()} == before
+
+
+def _stub_reports(monkeypatch, by_source):
+    """``by_source`` maps a source, or ``(source, class_index)``, to the (f1_max, ap40) it reports."""
+    calls = []
+
+    def fake_evaluate_units(run_fn, units, params, *, class_index=0):
+        calls.append([u.meta["source"] for u in units])
+        source = units[0].meta["source"]
+        f1, ap = by_source.get((source, class_index)) or by_source[source]
+        picks = {"big": 0.25, "big2": 0.25, "mid": 0.225}  # sources with enough boxes to pick
+        pick_sweep = [{"threshold": picks[source], "f1": f1}] if source in picks else []
+        rows = [{"tp": 300, "fn": 0}] if source in picks else []
+        return SimpleNamespace(
+            f1_max=f1, conf_at_max=0.3, ap40=ap, aoi_f1=f1, units=rows, pick_sweep=pick_sweep
+        )
+
+    monkeypatch.setattr(T, "evaluate_units", fake_evaluate_units)
+    return calls
+
+
+def _units(*sources):
+    return [SimpleNamespace(meta={"source": s}) for s in sources]
+
+
+def test_validate_balances_sources(monkeypatch):
+    calls = _stub_reports(monkeypatch, {"a": (0.8, 0.6), "b": (0.2, 0.4)})
+
+    units = {"tree": _units("a", "b", "a", "b")}
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    assert v["f1_max"] == pytest.approx(0.5) and v["ap40"] == pytest.approx(0.5)
+    assert v["f1_max_a"] == 0.8 and v["f1_max_b"] == 0.2 and v["ap40_a"] == 0.6
+    # MLflow's file store keeps a metric as a file, so no key may also be the folder of another
+    assert not any(k2.startswith(f"{k1}/") for k1 in v for k2 in v)
+    assert sorted(calls) == [["a", "a"], ["b", "b"]]
+
+
+def test_validate_single_source_unchanged(monkeypatch):
+    calls = _stub_reports(monkeypatch, {"a": (0.7, 0.5)})
+
+    v = T._validate(
+        torch.nn.Identity(), torch.device("cpu"), {"tree": _units("a", "a")}, InferenceParams(), 0
+    )
+
+    assert calls == [["a", "a"]]
+    assert set(v) == {"f1_max", "conf_at_max", "ap40", "aoi_f1", "seconds", "threshold_tree"}
+    assert v["f1_max"] == 0.7
+    assert v["threshold_tree"] == 0.15  # no ground truth to pick from: the one-class prior
+
+
+def test_validate_means_over_source_and_class(monkeypatch):
+    calls = _stub_reports(monkeypatch, {("hot", 0): (0.6, 0.5), ("hot", 1): (0.2, 0.1)})
+    units = {"tree": _units("hot", "hot"), "tree_group": _units("hot")}
+
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    assert v["f1_max"] == pytest.approx(0.4) and v["ap40"] == pytest.approx(0.3)
+    assert v["f1_max_hot"] == 0.6 and v["f1_max_hot_tree_group"] == 0.2 and v["ap40_hot_tree_group"] == 0.1
+    assert sorted(calls) == [["hot"], ["hot", "hot"]]
+
+
+def test_validate_picks_a_threshold_per_class(monkeypatch):
+    _stub_reports(monkeypatch, {"big": (0.6, 0.5), "small": (0.4, 0.3)})
+    units = {"tree": _units("big", "small"), "tree_group": _units("small")}
+
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    # trees: a pick (0.25) from the large source and the two-class prior (0.2) from the small one, averaged
+    assert v["threshold_tree"] == pytest.approx(0.225) and v["threshold_tree_group"] == 0.2
+
+
+def test_validate_snaps_the_mean_pick_to_the_grid(monkeypatch):
+    _stub_reports(monkeypatch, {"big": (0.6, 0.5), "big2": (0.6, 0.5), "mid": (0.6, 0.5)})
+    units = {"tree": _units("big", "big2", "mid")}
+
+    v = T._validate(torch.nn.Identity(), torch.device("cpu"), units, InferenceParams(), 0)
+
+    # mean(0.25, 0.25, 0.225) = 0.2417: served, exported and reported at the nearest grid point
+    assert v["threshold_tree"] == 0.25
+
+
+def test_best_epoch_thresholds_are_saved(monkeypatch, regions, weights, tmp_path):
+    script = Script([0.5, 0.6, 0.55])
+    validate = script.validate
+    script.validate = lambda model, device, units, params, epoch: (
+        validate(model, device, units, params, epoch) | {"threshold_tree": 0.1 + 0.05 * epoch}
+    )
+    res = _run(monkeypatch, script, regions, weights, tmp_path / "run")
+    assert res.thresholds == {"tree": pytest.approx(0.15)}
+    assert json.loads((tmp_path / "run" / "thresholds.json").read_text()) == {"tree": pytest.approx(0.15)}
+    windows = {"window_m": 40.0, "group_window_m": 120.0}  # the val windows the thresholds were picked at
+    assert json.loads((tmp_path / "run" / "windows.json").read_text()) == windows

@@ -1,0 +1,33 @@
+# hot_groups.yaml with crops up to 80 m instead of 120 m, the one change that matters: on held-out HOT test
+# the two-class run lost tree F1 against the tree-only run, and the tree-only recipe retrained on the same
+# HOT data (groups visible, trees unsupervised inside them) did not, so the cause is the 120 m crops or the
+# group class. Groups up to 80 m still fit a crop. Patience 10 trains the full cosine schedule (the epochs
+# and their samples match hot_groups.yaml) and every end-of-epoch checkpoint is kept, so stopping can be
+# judged afterwards from metrics.csv and the saved epochs.
+weights: runs/joint-base-wise-0.3/weights.pt  # relative to the Drive root
+sources: [hot]
+hyperparameters:
+  num_classes: 2
+  trainable_layers: 0
+  learning_rate: 0.001
+  momentum: 0.9
+  weight_decay: 0.0001
+  l2sp_alpha: 0.0
+  epochs: 10
+  patience: 10
+  min_delta: 0.005
+  batch_size: 4
+  samples_per_epoch: null         # one epoch = the number of train chips, as on the platform
+  schedule: cosine
+  amp: true
+  seed: 42
+  ckpt_every_min: 60
+  keep_last: 10
+  augment:
+    crop_m: [30, 80]
+val:
+  zooms: [20, 19]
+  max_regions: null
+  window_m: 60                    # the tree window hot_platform.yaml and its weight blends were scored at
+  group_window_m: 120
+mlflow: true

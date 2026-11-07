@@ -17,12 +17,15 @@ from typing import NamedTuple
 
 import numpy as np
 import torch
+from PIL import Image
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 from torchvision.models import resnet50
 from torchvision.models.detection import RetinaNet
 from torchvision.models.detection.backbone_utils import _resnet_fpn_extractor
 from torchvision.models.detection.image_list import ImageList
+from torchvision.ops import boxes as box_ops
+from torchvision.ops import sigmoid_focal_loss
 from torchvision.ops.feature_pyramid_network import LastLevelP6P7
 from torchvision.ops.misc import FrozenBatchNorm2d
 
@@ -36,8 +39,15 @@ from fair_trees.dataset import (
     sampler_stats,
     total_chips,
 )
-from fair_trees.evaluate import EvalUnit, evaluate_units, region_units
-from fair_trees.params import InferenceParams, TrainParams, parse_train_params
+from fair_trees.evaluate import (
+    PICK_THRESHOLDS,
+    PRIOR_THRESHOLD,
+    EvalUnit,
+    evaluate_units,
+    pick_threshold,
+    region_units,
+)
+from fair_trees.params import CLASSES, WINDOW_FIELDS, InferenceParams, TrainParams, parse_train_params
 from fair_trees.preprocess import preprocess_window
 from fair_trees.serve import RunFn
 
@@ -46,21 +56,62 @@ logger = logging.getLogger(__name__)
 CKPT_PATTERN = re.compile(r"^ckpt-e(\d{3})-s(\d{6})\.pt$")
 
 
-def build_model(weights: Path | None, *, trainable_layers: int) -> RetinaNet:
-    """Single-class RetinaNet (ResNet-50 FPN, frozen BN); loads `weights` strictly when given."""
+CLS_WEIGHT = "head.classification_head.cls_logits.weight"
+CLS_BIAS = "head.classification_head.cls_logits.bias"
+NUM_ANCHORS = 9  # 3 sizes x 3 aspect ratios per location
+
+
+def checkpoint_num_classes(state: Mapping[str, torch.Tensor]) -> int:
+    """Classes of a RetinaNet state dict: classification-head output rows per anchor."""
+    return state[CLS_WEIGHT].shape[0] // NUM_ANCHORS
+
+
+def _add_group_rows(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+    """Grow a tree-only state to tree + tree_group in place: row ``a*2`` keeps tree row ``a``; the group
+    rows start as torchvision initialises a head (N(0, 0.01) weights, prior-0.01 bias) from a fixed seed.
+
+    In place, so the state keeps its ``_metadata`` (module versions torchvision needs to rename the old
+    FPN keys of the release weights).
+    """
+    weight, bias = state[CLS_WEIGHT], state[CLS_BIAS]
+    generator = torch.Generator().manual_seed(0)
+    new_weight = torch.empty((2 * NUM_ANCHORS, *weight.shape[1:]), dtype=weight.dtype)
+    new_weight[0::2] = weight
+    new_weight[1::2] = torch.normal(0.0, 0.01, size=weight.shape, generator=generator).to(weight.dtype)
+    new_bias = torch.empty(2 * NUM_ANCHORS, dtype=bias.dtype)
+    new_bias[0::2] = bias
+    new_bias[1::2] = -math.log(99)
+    state[CLS_WEIGHT], state[CLS_BIAS] = new_weight, new_bias
+    return state
+
+
+def build_model(weights: Path | None, *, trainable_layers: int, num_classes: int | None = None) -> RetinaNet:
+    """RetinaNet (ResNet-50 FPN, frozen BN) with 1 or 2 classes; loads `weights` strictly when given.
+
+    `num_classes` None takes the checkpoint's (1 without weights). A tree-only checkpoint loads into a
+    two-class model with its tree rows kept and fresh tree_group rows; the reverse is refused.
+    """
     if not 0 <= trainable_layers <= 5:
         raise ValueError(f"trainable_layers must be in 0..5, got {trainable_layers}")
-    body = resnet50(weights=None, norm_layer=FrozenBatchNorm2d)
-    backbone = _resnet_fpn_extractor(
-        body, trainable_layers, returned_layers=[2, 3, 4], extra_blocks=LastLevelP6P7(256, 256)
-    )
-    model = RetinaNet(backbone, num_classes=1)
+    state = None
     if weights is not None:
         state = torch.load(weights, map_location="cpu", weights_only=True)
         # FrozenBatchNorm2d silently drops `num_batches_tracked`, so strict=True alone would
         # accept a trainable-BN checkpoint; reject that layout explicitly.
         if any(k.endswith("num_batches_tracked") for k in state):
             raise RuntimeError(f"{weights}: trainable batch-norm layout, expected frozen-BN state_dict")
+        found = checkpoint_num_classes(state)
+        num_classes = num_classes or found
+        if found > num_classes:
+            raise ValueError(f"{weights} has {found} classes; it cannot load into a model of {num_classes}")
+        if found < num_classes:
+            state = _add_group_rows(state)
+    body = resnet50(weights=None, norm_layer=FrozenBatchNorm2d)
+    backbone = _resnet_fpn_extractor(
+        body, trainable_layers, returned_layers=[2, 3, 4], extra_blocks=LastLevelP6P7(256, 256)
+    )
+    model = RetinaNet(backbone, num_classes=num_classes or 1)
+    if state is not None:
         model.load_state_dict(state, strict=True)
     return model
 
@@ -107,30 +158,59 @@ class Batch(NamedTuple):
     targets: list[dict[str, torch.Tensor]]
 
 
-def collate(items: Sequence[tuple[int, np.ndarray, tuple[int, int], np.ndarray]]) -> Batch:
-    """Stack `(index, image (3, Hp, Wp), resized (h, w), boxes (K, 4))` items into one padded batch."""
+Item = tuple[int, np.ndarray, tuple[int, int], np.ndarray, np.ndarray, np.ndarray]
+
+
+def collate(items: Sequence[Item]) -> Batch:
+    """Stack `(index, image (3, Hp, Wp), resized (h, w), boxes (K, 4), labels (K,), unsupervised (C, h, w))`
+    items into one padded batch; the unsupervised rasters are padded with False."""
     height = max(item[1].shape[1] for item in items)
     width = max(item[1].shape[2] for item in items)
     images = torch.zeros((len(items), 3, height, width), dtype=torch.float32)
-    for row, (_, image, _, _) in enumerate(items):
-        images[row, :, : image.shape[1], : image.shape[2]] = torch.from_numpy(np.ascontiguousarray(image))
     targets = []
-    for _, _, _, boxes in items:
-        boxes_t = torch.from_numpy(np.ascontiguousarray(boxes, dtype=np.float32)).reshape(-1, 4)
-        targets.append({"boxes": boxes_t, "labels": torch.zeros(len(boxes_t), dtype=torch.int64)})
+    for row, (_, image, _, boxes, labels, unsupervised) in enumerate(items):
+        images[row, :, : image.shape[1], : image.shape[2]] = torch.from_numpy(np.ascontiguousarray(image))
+        padded = torch.zeros((len(unsupervised), height, width), dtype=torch.bool)
+        padded[:, : unsupervised.shape[1], : unsupervised.shape[2]] = torch.from_numpy(unsupervised)
+        targets.append(
+            {
+                "boxes": torch.from_numpy(np.ascontiguousarray(boxes, dtype=np.float32)).reshape(-1, 4),
+                "labels": torch.from_numpy(np.ascontiguousarray(labels, dtype=np.int64)),
+                "unsupervised": padded,
+            }
+        )
     return Batch([item[0] for item in items], images, [tuple(item[2]) for item in items], targets)
 
 
+def _resize_masks(masks: np.ndarray, height: int, width: int) -> np.ndarray:
+    """Nearest-neighbour resize of (C, h, w) bool masks to (C, height, width)."""
+    out = [
+        np.asarray(Image.fromarray(m.astype(np.uint8)).resize((width, height), Image.Resampling.NEAREST))
+        for m in masks
+    ]
+    return np.stack(out).astype(bool).reshape(len(masks), height, width)
+
+
 class SampleDataset(Dataset):
-    """Planned samples from `start` on, preprocessed exactly as serving does; boxes in resized pixels."""
+    """Planned samples from `start` on, preprocessed exactly as serving does; boxes in resized pixels.
+
+    Only the model's first `num_classes` classes are kept: their boxes and unsupervised rasters.
+    """
 
     def __init__(
-        self, specs: Sequence[SampleSpec], regions: Sequence[Region], cfg: TrainParams, *, start: int = 0
+        self,
+        specs: Sequence[SampleSpec],
+        regions: Sequence[Region],
+        cfg: TrainParams,
+        *,
+        start: int = 0,
+        num_classes: int = 1,
     ):
         self.specs = specs
         self.regions = regions
         self.cfg = cfg
         self.start = start
+        self.num_classes = num_classes
         self._cache: RegionCache | None = None
 
     def __getstate__(self) -> dict:
@@ -140,19 +220,25 @@ class SampleDataset(Dataset):
     def __len__(self) -> int:
         return len(self.specs) - self.start
 
-    def __getitem__(self, i: int) -> tuple[int, np.ndarray, tuple[int, int], np.ndarray]:
+    def __getitem__(self, i: int) -> Item:
         if self._cache is None:
             self._cache = RegionCache(self.regions)
-        rgb, boxes = load_sample(self.specs[self.start + i], self._cache, self.cfg)
-        batch, scale = preprocess_window(rgb)
-        boxes = boxes * np.array([scale.scale_x, scale.scale_y, scale.scale_x, scale.scale_y], np.float32)
+        sample = load_sample(self.specs[self.start + i], self._cache, self.cfg)
+        batch, scale = preprocess_window(sample.rgb)
+        ours = sample.labels < self.num_classes
+        boxes = sample.boxes[ours] * np.array(
+            [scale.scale_x, scale.scale_y, scale.scale_x, scale.scale_y], np.float32
+        )
         # a degenerate box makes the box coder's log(w) infinite
         keep = ((boxes[:, 2] - boxes[:, 0]) >= 1.0) & ((boxes[:, 3] - boxes[:, 1]) >= 1.0)
+        size = (scale.resized_height, scale.resized_width)
         return (
             self.start + i,
             batch[0],
-            (scale.resized_height, scale.resized_width),
+            size,
             np.ascontiguousarray(boxes[keep], dtype=np.float32),
+            sample.labels[ours][keep],
+            _resize_masks(sample.unsupervised[: self.num_classes], *size),
         )
 
 
@@ -163,10 +249,11 @@ def make_loader(
     *,
     start: int = 0,
     num_workers: int = 2,
+    num_classes: int = 1,
 ) -> DataLoader:
     """Sequential loader over `specs[start:]`; DataLoader keeps worker order, so a resume is exact."""
     return DataLoader(
-        SampleDataset(specs, regions, cfg, start=start),
+        SampleDataset(specs, regions, cfg, start=start, num_classes=num_classes),
         batch_size=cfg.batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -181,11 +268,62 @@ def forward_loss(
     image_sizes: list[tuple[int, int]],
     targets: list[dict],
 ) -> dict[str, torch.Tensor]:
-    """Training losses on preprocessed batches; GeneralizedRCNNTransform never runs."""
+    """Training losses on preprocessed batches; GeneralizedRCNNTransform never runs.
+
+    torchvision's own loss runs unless some target has unsupervised pixels.
+    """
     features = list(model.backbone(images).values())
     head_outputs = model.head(features)
     anchors = model.anchor_generator(ImageList(images, image_sizes), features)
+    if any(t.get("unsupervised") is not None and t["unsupervised"].any() for t in targets):
+        return masked_compute_loss(model, targets, head_outputs, anchors)
     return model.compute_loss(targets, head_outputs, anchors)
+
+
+def masked_compute_loss(
+    model: RetinaNet, targets: list[dict], head_outputs: dict[str, torch.Tensor], anchors: list[torch.Tensor]
+) -> dict[str, torch.Tensor]:
+    """torchvision's RetinaNet loss, except that the negative classification terms of an anchor whose centre
+    lies on an unsupervised pixel of a class (``targets[i]["unsupervised"]``, (C, H, W) bool) are dropped.
+
+    Matching, the focal loss, its normalisation by the foreground count and the box regression are
+    torchvision's.
+    """
+    head = model.head.classification_head
+    matched_idxs = []
+    for anchors_per_image, t in zip(anchors, targets, strict=True):
+        if t["boxes"].numel() == 0:
+            matched_idxs.append(
+                torch.full((len(anchors_per_image),), -1, dtype=torch.int64, device=anchors_per_image.device)
+            )
+        else:
+            matched_idxs.append(model.proposal_matcher(box_ops.box_iou(t["boxes"], anchors_per_image)))
+
+    losses = []
+    for t, logits, anchors_per_image, matched in zip(
+        targets, head_outputs["cls_logits"], anchors, matched_idxs, strict=True
+    ):
+        foreground = matched >= 0
+        target = torch.zeros_like(logits)
+        target[foreground, t["labels"][matched[foreground]]] = 1.0
+        weight = torch.ones_like(logits)
+        unsupervised = t.get("unsupervised")
+        if unsupervised is not None:
+            _, h, w = unsupervised.shape
+            centres = (anchors_per_image[:, :2] + anchors_per_image[:, 2:]) / 2
+            cx = centres[:, 0].floor().long().clamp(0, w - 1)
+            cy = centres[:, 1].floor().long().clamp(0, h - 1)
+            off = unsupervised[:, cy, cx].T  # (anchors, C)
+            weight = torch.where(off & (target == 0), 0.0, 1.0).to(logits.dtype)
+        valid = matched != head.BETWEEN_THRESHOLDS
+        terms = sigmoid_focal_loss(logits[valid], target[valid], reduction="none") * weight[valid]
+        losses.append(terms.sum() / max(1, int(foreground.sum())))
+    return {
+        "classification": torch.stack(losses).sum() / len(targets),
+        "bbox_regression": model.head.regression_head.compute_loss(
+            targets, head_outputs, anchors, matched_idxs
+        ),
+    }
 
 
 def checkpoint_name(epoch: int, step: int) -> str:
@@ -278,6 +416,15 @@ class TrainResult:
     best_metrics: dict
     history: list[dict]
 
+    @property
+    def thresholds(self) -> dict[str, float]:
+        """The best epoch's val-picked operating threshold per class (what ``thresholds.json`` holds)."""
+        return _thresholds(self.best_metrics)
+
+
+def _thresholds(metrics: Mapping) -> dict[str, float]:
+    return {c: float(metrics[f"val/threshold_{c}"]) for c in CLASSES if f"val/threshold_{c}" in metrics}
+
 
 def _fresh_sums() -> dict:
     return {"cls": 0.0, "reg": 0.0, "l2sp": 0.0, "batches": 0}
@@ -311,19 +458,46 @@ def amp_dtype(device: torch.device, amp: bool) -> torch.dtype | None:
 
 
 def _validate(
-    model: RetinaNet, device: torch.device, units: Sequence[EvalUnit], params: InferenceParams, epoch: int
+    model: RetinaNet,
+    device: torch.device,
+    units: Mapping[str, Sequence[EvalUnit]],
+    params: InferenceParams,
+    epoch: int,
 ) -> dict:
-    """Val metrics through the serving decode path; puts the model back in train mode."""
+    """Val metrics through the serving decode path; puts the model back in train mode.
+
+    ``units`` maps a class name to its units. Each (source, class) is scored on its own and the scores are
+    the equal-weight means over them (with ``f1_max_<source>`` / ``ap40_<source>`` for trees and
+    ``f1_max_<source>_tree_group`` / ``ap40_<source>_tree_group`` for groups alongside when there are
+    several), so neither a large source nor one class drowns out the rest in early stopping.
+    ``threshold_<class>`` is the operating threshold picked on val (``pick_threshold``; the mean over
+    sources, snapped to ``PICK_THRESHOLDS``), with the prior for a model of that many classes.
+    """
     t0 = time.monotonic()
-    report = evaluate_units(torch_run_fn(model, device), units, params)
+    run_fn = torch_run_fn(model, device)
+    prior = PRIOR_THRESHOLD[len(units)]
+    reports = {}
+    picks: dict[str, list[float]] = {}
+    for name, class_units in units.items():
+        by_source: dict[str, list[EvalUnit]] = {}
+        for u in class_units:
+            by_source.setdefault(u.meta["source"], []).append(u)
+        for s, us in sorted(by_source.items()):
+            key = s if name == "tree" else f"{s}_{name}"
+            reports[key] = evaluate_units(run_fn, us, params, class_index=CLASSES.index(name))
+            picks.setdefault(name, []).append(pick_threshold(reports[key], prior))
     model.train()
-    return {
-        "f1_max": report.f1_max,
-        "conf_at_max": report.conf_at_max,
-        "ap40": report.ap40,
-        "aoi_f1": report.aoi_f1,
-        "seconds": time.monotonic() - t0,
+    keys = ("f1_max", "conf_at_max", "ap40", "aoi_f1")
+    metrics = {k: float(np.mean([getattr(r, k) for r in reports.values()])) for k in keys}
+    grid = np.asarray(PICK_THRESHOLDS)  # a mean over sources snaps back to the grid every report uses
+    metrics |= {
+        f"threshold_{name}": float(grid[np.abs(grid - np.mean(ts)).argmin()]) for name, ts in picks.items()
     }
+    if len(reports) > 1:
+        for key, r in reports.items():
+            # not "f1_max/<source>": MLflow's file store cannot hold "f1_max" as both a file and a folder
+            metrics |= {f"f1_max_{key}": r.f1_max, f"ap40_{key}": r.ap40}
+    return metrics | {"seconds": time.monotonic() - t0}
 
 
 def _load_scaler_state(scaler: torch.amp.GradScaler, state: Mapping) -> None:
@@ -337,14 +511,16 @@ def _load_scaler_state(scaler: torch.amp.GradScaler, state: Mapping) -> None:
 
 
 def _supersede(out_dir: Path) -> Path:
-    """Move an earlier run's checkpoints, best.pt and metrics.csv into `superseded-<n>`; delete nothing."""
+    """Move an earlier run's checkpoints, best.pt, metrics.csv, thresholds.json and windows.json into
+    `superseded-<n>`."""
     n = 0
     while (out_dir / f"superseded-{n}").exists():
         n += 1
     dest = out_dir / f"superseded-{n}"
     dest.mkdir()
     old = [path for _, path in _checkpoints(out_dir)]
-    old += [out_dir / name for name in ("best.pt", "metrics.csv") if (out_dir / name).exists()]
+    names = ("best.pt", "metrics.csv", "thresholds.json", "windows.json")
+    old += [out_dir / name for name in names if (out_dir / name).exists()]
     for path in old:
         os.replace(path, dest / path.name)
     logger.warning(f"force=True with resume=False: moved the earlier run's {len(old)} files to {dest}")
@@ -385,7 +561,8 @@ def train(
     repo_sha: str = "",
     manifest_hash: str = "",
 ) -> TrainResult:
-    """Train from `weights` with early stopping on val f1_max; resumes from the newest checkpoint.
+    """Train from `weights` with early stopping on val f1_max (the mean over sources when val mixes
+    sources); resumes from the newest checkpoint.
 
     The epoch plan is regenerated from (seed, epoch) on resume, so an interrupted run trains on the same
     samples as an uninterrupted one. A finished run returns its result without training.
@@ -396,7 +573,15 @@ def train(
         val_params = InferenceParams()
     out_dir = Path(out_dir)
     device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-    model = build_model(weights, trainable_layers=cfg.trainable_layers).to(device).train()
+    model = build_model(weights, trainable_layers=cfg.trainable_layers, num_classes=cfg.num_classes)
+    model = model.to(device).train()
+    num_classes = model.head.classification_head.num_classes
+    if num_classes == 2 and not any("tree_group" in r.classes for r in train_regions):
+        # the group rows would get no loss term and ship untrained
+        raise ValueError(
+            "a two-class model needs train regions that label tree_group (label 2); none do. "
+            "Use a tree-only model, or data with tree_group labels."
+        )
     ref = snapshot(model)
     w0 = state_hash(ref)
     chash = config_hash(cfg)
@@ -447,7 +632,9 @@ def train(
         _supersede(out_dir)
 
     # after the resume check, so a finished run returns without reading the val set
-    val_units = region_units(val_regions, zooms=val_zooms) if val_regions else []
+    val_units = {"tree": region_units(val_regions, zooms=val_zooms)} if val_regions else {}
+    if num_classes == 2 and any("tree_group" in r.classes for r in val_regions):
+        val_units["tree_group"] = region_units(val_regions, zooms=val_zooms, label=2)
     if not val_regions:
         logger.warning("no val regions: every epoch counts as an improvement and best.pt is the last epoch")
 
@@ -475,7 +662,12 @@ def train(
         t_epoch = time.monotonic()
         trained = 0  # samples trained in this session; a resumed epoch counts only its remainder
         loader = make_loader(
-            specs, train_regions, cfg, start=s.step * cfg.batch_size, num_workers=num_workers
+            specs,
+            train_regions,
+            cfg,
+            start=s.step * cfg.batch_size,
+            num_workers=num_workers,
+            num_classes=num_classes,
         )
         for batch in loader:
             images = batch.images.to(device)
@@ -532,6 +724,12 @@ def train(
             s.patience_left = cfg.patience
             s.best_metrics = dict(metrics)
             save_file(model.state_dict(), out_dir, "best.pt", tmp_dir=tmp_dir, keep_last=None)
+            if thresholds := _thresholds(s.best_metrics):
+                windows = {name: getattr(val_params, name) for name in WINDOW_FIELDS}
+                for name, values in (("windows.json", windows), ("thresholds.json", thresholds)):
+                    part = out_dir / f"{name}.part"
+                    part.write_text(json.dumps(values, indent=2))
+                    os.replace(part, out_dir / name)
         else:
             s.patience_left -= 1
 
@@ -590,10 +788,11 @@ def fine_tune(
     the chip files, their split and the labels, so a resume on changed data is refused.
     """
     train_kwargs.setdefault("manifest_hash", fair_data_hash(train_chips, val_chips, labels_path))
+    hp = hyperparameters or {}
     cfg = parse_train_params(hyperparameters)
     train_regions = load_fair_dataset(train_chips, labels_path, split="train")
     val_regions = load_fair_dataset(val_chips, labels_path, split="val")
-    if (hyperparameters or {}).get("zoom_weights") is None:
+    if hp.get("zoom_weights") is None:
         zooms = sorted({z for r in train_regions for z in r.chips})
         cfg = dataclasses.replace(cfg, zoom_weights={z: 1.0 for z in zooms})
     return train(

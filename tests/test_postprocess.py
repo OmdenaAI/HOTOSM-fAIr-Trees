@@ -25,6 +25,27 @@ def test_label_when_enabled():
     assert f["properties"] == {"class": 1, "score": 0.5, "label": "tree"}
 
 
+def test_classes_per_feature():
+    fc = to_feature_collection(
+        [ring(0, 0), ring(5, 5)], np.array([0.5, 0.6]), classes=np.array([1, 2]), include_label=True
+    )
+    assert [f["properties"] for f in fc["features"]] == [
+        {"class": 1, "score": 0.5, "label": "tree"},
+        {"class": 2, "score": 0.6, "label": "tree_group"},
+    ]
+
+
+def test_in_group_flag_only_where_given():
+    fc = to_feature_collection(
+        [ring(0, 0), ring(5, 5), ring(9, 9)],
+        np.array([0.5, 0.6, 0.7]),
+        classes=np.array([1, 1, 2]),
+        in_group=[True, False, None],
+    )
+    assert [f["properties"].get("in_group") for f in fc["features"]] == [True, False, None]
+    assert "in_group" not in fc["features"][2]["properties"]
+
+
 def test_empty():
     assert to_feature_collection([], np.zeros(0)) == {"type": "FeatureCollection", "features": []}
 

@@ -5,7 +5,15 @@ import pytest
 
 pytest.importorskip("scipy")
 
-from fair_trees.evaluate import EvalUnit, evaluate_units  # noqa: E402
+from fair_trees.evaluate import (  # noqa: E402
+    MIN_PICK_GT,
+    PICK_THRESHOLDS,
+    EvalReport,
+    EvalUnit,
+    evaluate_units,
+    f1_at,
+    pick_threshold,
+)
 from fair_trees.params import InferenceParams  # noqa: E402
 from fair_trees.preprocess import array_mosaic  # noqa: E402
 from fair_trees.serve import ort_run_fn  # noqa: E402
@@ -81,3 +89,62 @@ def test_decodes_below_a_low_operating_point(fake_session):
         weak, [_unit("u1", [[123, 123, 133, 133]])], InferenceParams(confidence_threshold=0.002)
     )
     assert r.units[0]["tp"] == 1
+
+
+def test_scoring_ignores_model_thresholds(run):
+    params = InferenceParams(confidence_threshold=0.5, class_thresholds=(0.999,))
+    r = evaluate_units(run, [_unit("u1", [[123, 123, 133, 133]])], params)
+    assert r.units[0]["tp"] == 1 and r.sweep[0]["f1"] == 1.0
+
+
+def test_pick_sweep_covers_the_pick_grid(run):
+    r = evaluate_units(run, [_unit("u1", [[123, 123, 133, 133]])], PARAMS)
+    assert [s["threshold"] for s in r.pick_sweep] == pytest.approx([0.1 + 0.025 * i for i in range(9)])
+    assert all(s["f1"] == 1.0 and s["units"] == [[1, 0, 0]] for s in r.pick_sweep)
+    assert r.to_dict()["pick_sweep"] == r.pick_sweep
+
+
+def test_pick_sweep_is_also_scored_at_iou_50(run):
+    # the planted box [122.9, 133.1] against a 15.5 px truth box: IoU about 0.42
+    r = evaluate_units(run, [_unit("u1", [[123, 123, 138.5, 138.5]])], PARAMS)
+    assert all(s["f1"] == 1.0 for s in r.pick_sweep)
+    assert [s["threshold"] for s in r.pick_sweep_iou50] == [s["threshold"] for s in r.pick_sweep]
+    assert all(s["f1"] == 0.0 and s["recall"] == 0.0 for s in r.pick_sweep_iou50)
+    assert r.to_dict()["pick_sweep_iou50"] == r.pick_sweep_iou50
+
+
+def test_given_group_parts_are_scored_without_decoding(fake_session):
+    from fair_trees.decode import Detections
+
+    box = np.array([[120, 120, 136, 136]], np.float32)
+    parts = [[(Detections(box, np.array([0.9], np.float32)), np.array([False]))]]
+    session = fake_session(num_classes=2)
+    r = evaluate_units(ort_run_fn(session), [_unit("u1", box)], PARAMS, class_index=1, group_parts=parts)
+    assert r.units[0]["tp"] == 1 and session.calls == []
+
+
+def _report(f1s, n_gt):
+    sweep = [
+        {"threshold": float(t), "precision": f, "recall": f, "f1": f}
+        for t, f in zip(PICK_THRESHOLDS, f1s, strict=True)
+    ]
+    units = [{"unit_id": "u", "meta": {}, "tp": n_gt // 2, "fp": 0, "fn": n_gt - n_gt // 2}]
+    return EvalReport(0.1, 0.4, 0, 0, 0, 0, 0, 0, 0, [], units, {}, pick_sweep=sweep)
+
+
+def test_pick_threshold_takes_the_lowest_best_on_the_grid():
+    f1s = [0.40, 0.50, 0.55, 0.57, 0.57, 0.52, 0.50, 0.45, 0.40]
+    assert pick_threshold(_report(f1s, 500), prior=0.15) == pytest.approx(0.175)
+
+
+def test_pick_threshold_falls_back_to_the_prior_on_small_val():
+    f1s = [0.40, 0.50, 0.55, 0.57, 0.60, 0.52, 0.50, 0.45, 0.40]
+    assert pick_threshold(_report(f1s, MIN_PICK_GT - 1), prior=0.15) == 0.15
+    assert pick_threshold(_report(f1s, MIN_PICK_GT), prior=0.15) == pytest.approx(0.2)
+
+
+def test_f1_at_reads_the_pick_sweep():
+    f1s = [0.40, 0.50, 0.55, 0.57, 0.60, 0.52, 0.50, 0.45, 0.40]
+    assert f1_at(_report(f1s, 500), 0.2)["f1"] == 0.60
+    with pytest.raises(KeyError):
+        f1_at(_report(f1s, 500), 0.33)

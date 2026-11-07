@@ -10,9 +10,21 @@ from fair_trees.params import (
     SplitParams,
     TrainParams,
     parse_inference_params,
+    parse_model_windows,
     parse_split_params,
     parse_train_params,
 )
+
+
+def test_model_windows_parse_or_are_ignored(caplog):
+    assert parse_model_windows(None) == {}
+    text = '{"window_m": 60, "group_window_m": 120, "other": 1}'
+    assert parse_model_windows(text) == {"window_m": 60.0, "group_window_m": 120.0}
+    with caplog.at_level(logging.WARNING):
+        assert parse_model_windows('{"window_m": 1000}') == {}
+        assert parse_model_windows("not json") == {}
+        assert parse_model_windows('{"window_m": true}') == {}
+    assert caplog.text.count("windows") == 3
 
 
 @pytest.mark.parametrize("value", [None, {}])
@@ -83,6 +95,22 @@ def test_inference_ranges(hp):
         parse_inference_params(hp)
 
 
+def test_group_window_param():
+    assert InferenceParams().group_window_m == 120.0
+    assert parse_inference_params({"group_window_m": 80}).group_window_m == 80.0
+    for bad in (4, 201):
+        with pytest.raises(ValueError, match="group_window_m"):
+            parse_inference_params({"group_window_m": bad})
+
+
+def test_group_merge_param():
+    assert InferenceParams().group_merge == "drop_edge"
+    for rule in ("join", "overlap", "drop_edge"):
+        assert parse_inference_params({"group_merge": rule}).group_merge == rule
+    with pytest.raises(ValueError, match="group_merge"):
+        parse_inference_params({"group_merge": "glue"})
+
+
 def test_split_params():
     p = parse_split_params({"val_ratio": 0.3, "z_ref": 19, "block_size": 2})
     assert p == SplitParams(val_ratio=0.3, split_seed=42, block_size=2, z_ref=19)
@@ -128,6 +156,15 @@ def test_l2sp_forces_zero_weight_decay():
 def test_train_ranges(hp):
     with pytest.raises(ValueError):
         parse_train_params(hp)
+
+
+def test_num_classes_parsed():
+    assert TrainParams().num_classes is None
+    assert parse_train_params({"num_classes": 1}).num_classes == 1
+    assert parse_train_params({"num_classes": 2}).num_classes == 2
+    for bad in (0, 3, "two"):
+        with pytest.raises(ValueError, match="num_classes"):
+            parse_train_params({"num_classes": bad})
 
 
 def test_zoom_weight_keys_from_json():

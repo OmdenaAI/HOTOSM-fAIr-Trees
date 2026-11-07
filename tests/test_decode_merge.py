@@ -3,11 +3,13 @@ import numpy as np
 from fair_trees.decode import (
     Detections,
     concat_detections,
+    cut_boxes,
     decode_retinanet_output,
     drop_edge_boxes,
     filter_score,
     interior_sides,
     make_anchors,
+    merge_group_detections,
     merge_window_detections,
     window_to_mosaic,
 )
@@ -51,6 +53,34 @@ def test_drop_edge_boxes():
     np.testing.assert_allclose(
         drop_edge_boxes(d, win, {"left", "right", "top"}, 0.0).scores, [0.9, 0.8, 0.7, 0.6]
     )
+
+
+def test_cut_boxes_are_the_ones_drop_edge_boxes_drops():
+    win = Window(100, 100, 200, 200)
+    d = _dets([[105, 150, 140, 180], [150, 150, 180, 180], [260, 150, 295, 180]], [0.9, 0.8, 0.7])
+    assert cut_boxes(d, win, {"left", "right"}, 0.05).tolist() == [True, False, True]
+
+
+def test_group_split_across_windows_is_joined():
+    a = (_dets([[80, 10, 100, 30]], [0.5]), np.array([True]))
+    b = (_dets([[95, 12, 130, 32]], [0.7]), np.array([True]))
+    m = merge_group_detections([a, b], 0.15, rule="join")
+    np.testing.assert_allclose(m.boxes, [[80, 10, 130, 32]])
+    np.testing.assert_allclose(m.scores, [0.7])
+
+
+def test_cut_group_joins_full_box_of_other_window():
+    a = (_dets([[80, 10, 100, 30]], [0.5]), np.array([True]))
+    b = (_dets([[60, 10, 130, 30], [300, 300, 340, 340]], [0.9, 0.4]), np.array([False, False]))
+    m = merge_group_detections([a, b], 0.15, rule="join")
+    assert _as_set(m) == {(60.0, 10.0, 130.0, 30.0, 0.9), (300.0, 300.0, 340.0, 340.0, 0.4)}
+
+
+def test_separate_groups_stay_separate():
+    a = (_dets([[0, 0, 10, 10], [12, 0, 20, 10]], [0.9, 0.8]), np.array([True, False]))
+    b = (_dets([[50, 50, 60, 60]], [0.5]), np.array([True]))
+    m = merge_group_detections([a, b], 0.15, rule="join")
+    assert len(m.scores) == 3  # a cut box only joins boxes of another window it overlaps
 
 
 def test_merge_keeps_highest_and_filter_is_strict():
@@ -114,3 +144,35 @@ def test_sweep_equivalence_on_merged_output():
     low = pipeline(0.01)
     for t in (0.05, 0.2, 0.5):
         assert _as_set(filter_score(low, t)) == _as_set(pipeline(t))
+
+
+def test_overlap_rule_joins_only_substantial_overlaps():
+    a = (_dets([[0, 0, 60, 40], [200, 0, 260, 40]], [0.5, 0.6]), np.array([True, True]))
+    b = (_dets([[25, 0, 100, 40], [255, 0, 330, 40]], [0.7, 0.4]), np.array([True, True]))
+    m = merge_group_detections([a, b], 0.15, rule="overlap")
+    # 35/60 of the smaller box shared: joined; 5/60: kept apart
+    assert _as_set(m) == {
+        (0.0, 0.0, 100.0, 40.0, 0.7),
+        (200.0, 0.0, 260.0, 40.0, 0.6),
+        (255.0, 0.0, 330.0, 40.0, 0.4),
+    }
+
+
+def test_drop_edge_rule_keeps_only_uncut_boxes():
+    a = (_dets([[80, 10, 100, 30], [0, 0, 20, 20]], [0.5, 0.3]), np.array([True, False]))
+    b = (_dets([[60, 10, 130, 30]], [0.9]), np.array([False]))
+    m = merge_group_detections([a, b], 0.15, rule="drop_edge")
+    assert _as_set(m) == {(60.0, 10.0, 130.0, 30.0, 0.9), (0.0, 0.0, 20.0, 20.0, 0.3)}
+
+
+def test_drop_edge_is_the_default_rule():
+    a = (_dets([[0, 0, 60, 40], [200, 0, 220, 20]], [0.5, 0.4]), np.array([True, False]))
+    b = (_dets([[55, 0, 100, 40]], [0.7]), np.array([True]))
+    assert _as_set(merge_group_detections([a, b], 0.15)) == {(200.0, 0.0, 220.0, 20.0, 0.4)}
+
+
+def test_unknown_rule_rejected():
+    import pytest
+
+    with pytest.raises(ValueError, match="group_merge"):
+        merge_group_detections([], 0.15, rule="glue")

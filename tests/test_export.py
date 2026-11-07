@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 
@@ -9,7 +10,7 @@ onnx = pytest.importorskip("onnx")
 ort = pytest.importorskip("onnxruntime")
 
 from fair_trees.export import OPSET, export_onnx_bytes  # noqa: E402
-from fair_trees.params import INPUT_NAME, OUTPUT_NAMES  # noqa: E402
+from fair_trees.params import INPUT_NAME, OUTPUT_NAMES, THRESHOLDS_KEY, WINDOWS_KEY  # noqa: E402
 from fair_trees.preprocess import preprocess_window  # noqa: E402
 from fair_trees.serve import ort_run_fn  # noqa: E402
 from fair_trees.train import build_model, torch_run_fn  # noqa: E402
@@ -44,6 +45,43 @@ def test_ort_matches_torch(exported, hw):
     t_cls, t_reg = torch_run_fn(model, torch.device("cpu"))(batch)
     np.testing.assert_allclose(o_cls, t_cls, atol=2e-3)
     np.testing.assert_allclose(o_reg, t_reg, atol=2e-3)
+
+
+def test_thresholds_travel_in_the_model_metadata(tmp_path):
+    torch.manual_seed(0)
+    ckpt = tmp_path / "best.pt"
+    torch.save(build_model(None, trainable_layers=0).state_dict(), ckpt)
+    out = tmp_path / "plain.onnx"
+    subprocess.run([sys.executable, "-m", "fair_trees.export", str(ckpt), str(out)], check=True)
+    meta = ort.InferenceSession(str(out), providers=["CPUExecutionProvider"]).get_modelmeta()
+    assert THRESHOLDS_KEY not in meta.custom_metadata_map
+
+    (tmp_path / "thresholds.json").write_text(json.dumps({"tree": 0.175}))
+    out = tmp_path / "picked.onnx"
+    subprocess.run([sys.executable, "-m", "fair_trees.export", str(ckpt), str(out)], check=True)
+    meta = ort.InferenceSession(str(out), providers=["CPUExecutionProvider"]).get_modelmeta()
+    assert json.loads(meta.custom_metadata_map[THRESHOLDS_KEY]) == {"tree": 0.175}
+    assert WINDOWS_KEY not in meta.custom_metadata_map
+
+    # the windows the thresholds were picked at travel with them
+    (tmp_path / "windows.json").write_text(json.dumps({"window_m": 60.0, "group_window_m": 120.0}))
+    out = tmp_path / "windows.onnx"
+    subprocess.run([sys.executable, "-m", "fair_trees.export", str(ckpt), str(out)], check=True)
+    meta = ort.InferenceSession(str(out), providers=["CPUExecutionProvider"]).get_modelmeta()
+    assert json.loads(meta.custom_metadata_map[WINDOWS_KEY]) == {"window_m": 60.0, "group_window_m": 120.0}
+
+
+def test_export_k2_outputs_k_columns(tmp_path):
+    torch.manual_seed(0)
+    ckpt = tmp_path / "k2.pt"
+    torch.save(build_model(None, trainable_layers=0, num_classes=2).state_dict(), ckpt)
+    out = tmp_path / "k2.onnx"
+    subprocess.run([sys.executable, "-m", "fair_trees.export", str(ckpt), str(out)], check=True)
+    batch, _ = preprocess_window(np.random.default_rng(2).integers(0, 256, (256, 256, 3), dtype=np.uint8))
+    o_cls, _ = ort_run_fn(ort.InferenceSession(str(out), providers=["CPUExecutionProvider"]))(batch)
+    t_cls, _ = torch_run_fn(build_model(ckpt, trainable_layers=0), torch.device("cpu"))(batch)
+    assert o_cls.shape[-1] == 2
+    np.testing.assert_allclose(o_cls, t_cls, atol=2e-3)
 
 
 def test_cli_writes_onnx(tmp_path):

@@ -1,0 +1,27 @@
+# A single-class base trained on NEON and OAM-TCD from the release weights, with more of the backbone
+# trainable. Both sources get equal draws (area weighting would give NEON about 5%), and early stopping
+# averages the two sources' val scores. OAM-TCD val is cut to 100 tiles so validation stays under ~10 min.
+weights: weights/NEON.pt          # relative to the Drive root
+sources: [neon, oamtcd]
+hyperparameters:
+  trainable_layers: 3
+  learning_rate: 0.001
+  momentum: 0.9
+  weight_decay: 0.0001
+  l2sp_alpha: 0.0
+  epochs: 10
+  patience: 3
+  min_delta: 0.005
+  batch_size: 4
+  samples_per_epoch: 20000
+  schedule: cosine
+  source_alpha: 0.0               # equal draws per source
+  augment:
+    crop_m: [30, 120]
+  amp: true
+  seed: 42
+val:
+  zooms: [20, 19]
+  max_regions: {oamtcd: 100}
+  window_m: 40
+mlflow: true

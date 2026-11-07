@@ -5,7 +5,7 @@ pytest.importorskip("scipy")
 
 from fair_trees.dataset import load_regions  # noqa: E402
 from fair_trees.evaluate import evaluate_regions, region_units  # noqa: E402
-from fair_trees.params import InferenceParams  # noqa: E402
+from fair_trees.params import CLASSES, InferenceParams  # noqa: E402
 from fair_trees.serve import ort_run_fn  # noqa: E402
 
 CENTRE_ANCHOR_800 = (50 * 100 + 50) * 9 + 3  # box ~[122.9, 122.9, 133.1, 133.1] in a 256 px mosaic
@@ -40,6 +40,33 @@ def test_evaluate_regions_scores_planted_box(write_region, fake_session):
     r = evaluate_regions(run, load_regions(d.parent), PARAMS)
     assert (r.precision, r.recall, r.f1) == (1.0, 1.0, 1.0)
     assert r.breakdown["zoom"]["20"]["n_units"] == 1
+
+
+def test_group_units_score_group_boxes(write_region, fake_session):
+    d = write_region("r", boxes_px=[(10, 10, 20, 20)], groups_px=[(123, 123, 133, 133)], classes=CLASSES)
+    write_region("s", boxes_px=[(10, 10, 20, 20)])  # labels no groups: not a group unit
+    regions = load_regions(d.parent)
+    assert [u.unit_id for u in region_units(regions, label=2)] == ["r"]
+    run = ort_run_fn(fake_session({(CENTRE_ANCHOR_800, 1): 5.0}, num_classes=2))
+    groups = evaluate_regions(run, regions, PARAMS, label=2)
+    assert (groups.precision, groups.recall, groups.f1) == (1.0, 1.0, 1.0)
+    trees = evaluate_regions(run, regions, PARAMS)
+    assert trees.recall == 0.0 and len(trees.units) == 2
+
+
+def test_group_units_ignore_dropped_groups(write_region, fake_session):
+    d = write_region("r", groups_px=[(100, 100, 500, 160)], classes=CLASSES)  # 39 % inside the unit
+    [u] = region_units(load_regions(d.parent), label=2)
+    assert len(u.gt_boxes) == 0
+    run = ort_run_fn(fake_session({(CENTRE_ANCHOR_800, 1): 5.0}, num_classes=2))
+    r = evaluate_regions(run, load_regions(d.parent), PARAMS, label=2)
+    assert (r.units[0]["fp"], r.units[0]["fn"]) == (0, 0)
+
+
+def test_tree_units_ignore_group_polygons(write_region, fake_session):
+    d = write_region("r", groups_px=[(110, 110, 150, 150)], classes=CLASSES)
+    run = ort_run_fn(fake_session({CENTRE_ANCHOR_800: 5.0}))
+    assert evaluate_regions(run, load_regions(d.parent), PARAMS).units[0]["fp"] == 0
 
 
 def test_ignore_polygons_drop_predictions(write_region, fake_session):

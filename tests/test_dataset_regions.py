@@ -13,6 +13,7 @@ from fair_trees.dataset import (
     load_regions,
     rasterize_mask,
 )
+from fair_trees.params import CLASSES
 from fair_trees.preprocess import tile_groups
 
 X0 = Y0 = 2**19
@@ -47,6 +48,39 @@ def test_only_label_one_kept_and_missing_label_is_tree(geo):
     assert len(label_rings(fc)) == 4  # 1, "1", missing, None
 
 
+def test_label_rings_by_class(geo, origin):
+    polys = [geo.box_polygon((k * 20, 0, k * 20 + 10, 10)) for k in range(5)]
+    props = [{}, {"label": 1}, {"label": "1"}, {"label": 2}, {"label": 3}]
+    pairs = zip(polys, props, strict=True)
+    features = [{"type": "Feature", "geometry": g, "properties": p} for g, p in pairs]
+    fc = {"type": "FeatureCollection", "features": features}
+    assert len(label_rings(fc)) == 3
+    np.testing.assert_allclose(labels_to_boxes(fc, origin, label=2), [[60, 0, 70, 10]], atol=1e-6)
+    assert label_rings(fc, label=3) == []
+
+
+def test_region_classes_default_and_read(write_region):
+    write_region("a")
+    write_region("b", classes=["tree", "tree_group"])
+    a, b = load_regions(write_region("c", classes=["tree"]).parent)[:2]
+    assert a.classes == ("tree",)
+    assert b.classes == ("tree", "tree_group")
+    d = write_region("d", classes=["tree", "shrub"])
+    with pytest.raises(ValueError, match="shrub"):
+        load_regions(d.parent)
+
+
+def test_fair_dataset_classes_follow_labels(write_oam_chip, tmp_path, geo):
+    chips = [write_oam_chip(X0, Y0)]
+    labels = tmp_path / "labels.geojson"
+    fc = geo.feature_collection([geo.box_polygon((10, 10, 20, 20))])
+    labels.write_text(json.dumps(fc))
+    assert load_fair_dataset(chips, labels)[0].classes == ("tree",)
+    fc["features"] += geo.feature_collection([geo.box_polygon((30, 30, 90, 90))], label=2)["features"]
+    labels.write_text(json.dumps(fc))
+    assert load_fair_dataset(chips, labels)[0].classes == CLASSES
+
+
 def test_multipolygon_split_into_parts(geo, origin):
     a = geo.box_polygon((0, 0, 10, 10))["coordinates"]
     b = geo.box_polygon((50, 50, 70, 80))["coordinates"]
@@ -57,6 +91,19 @@ def test_multipolygon_split_into_parts(geo, origin):
     }
     fc = {"type": "FeatureCollection", "features": [feature]}
     np.testing.assert_allclose(labels_to_boxes(fc, origin), [[0, 0, 10, 10], [50, 50, 70, 80]], atol=1e-6)
+
+
+def test_multipolygon_group_is_one_box(geo, origin):
+    # canopy minus the crowns inside can fall apart into pieces: still one group
+    a = geo.box_polygon((0, 0, 10, 10))["coordinates"]
+    b = geo.box_polygon((50, 50, 70, 80))["coordinates"]
+    feature = {
+        "type": "Feature",
+        "geometry": {"type": "MultiPolygon", "coordinates": [a, b]},
+        "properties": {"label": 2},
+    }
+    fc = {"type": "FeatureCollection", "features": [feature]}
+    np.testing.assert_allclose(labels_to_boxes(fc, origin, label=2), [[0, 0, 70, 80]], atol=1e-6)
 
 
 def test_altitude_is_dropped(geo, origin):
