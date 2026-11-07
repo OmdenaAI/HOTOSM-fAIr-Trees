@@ -3,7 +3,6 @@
 import io
 import json
 import math
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,24 +15,15 @@ from PIL import Image
 from rasterio.features import rasterize
 
 from experiments.label_study.audit import label_table, region_table
+from fair_trees.dataset import MAX_DIAMETER_M, parse_diameter
 from fair_trees.georef import mercator_y_to_lat, parse_oam_name
 from fair_trees.preprocess import Mosaic, mosaic_chips, tile_groups
 
 REPO_ID = "hotosm/fAIr-guru-td-trees"
 REVISION = "v0.1.0"
 UTM = "EPSG:32628"
-# diameter_crown typos reach 25,231 m; one such square covers the city and chains every tree into one cluster
-MAX_DIAMETER_M = 30.0
 TILE_PX = 256  # side of a HOT tile
 KEPT_FORMATS = {"PNG": ".png", "JPEG": ".jpg"}  # tile formats written to the chips unchanged
-
-
-def parse_diameter(value) -> float:
-    """Metres from strings like '3m', '2.412m', '3,134 m', '4'; NaN if missing or unclear."""
-    if not isinstance(value, str):
-        return np.nan
-    m = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*(?:m|M|metres|meters)?\s*", value)
-    return float(m.group(1).replace(",", ".")) if m else np.nan
 
 
 def known_diameter(diameter_m: pd.Series) -> pd.Series:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from collections import Counter, OrderedDict
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -31,7 +32,11 @@ MIN_BOX_FRACTION = 0.4
 MAX_MASKED = 0.8  # a crop with more masked area than this is redrawn
 CROP_RETRIES = 20
 LOWRES_CELLS = 16  # low-resolution mask cells per tile side
+# mapper diameter_crown typos reach 25,231 m; a crown over this is read as an unknown diameter
+MAX_DIAMETER_M = 30.0
+_DIAMETER = re.compile(r"\s*(\d+(?:[.,]\d+)?)\s*(?:m|M|metres|meters)?\s*")
 _TO_3857 = Transformer.from_crs(4326, 3857, always_xy=True)
+_TO_4326 = Transformer.from_crs(3857, 4326, always_xy=True)
 _REQUIRED_KEYS = ("id", "source", "biome", "licence", "split", "footprint", "valid_area_m2")
 
 
@@ -95,23 +100,79 @@ def _exterior_ring(part: list) -> tuple[np.ndarray, str | None]:
     return ring, _invalid_reason(ring)
 
 
+def parse_diameter(value) -> float:
+    """Metres from a ``diameter_crown`` value such as '3m', '2.412m', '3,134 m', '4' or 4; NaN if missing or
+    unclear."""
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    if not isinstance(value, str):
+        return math.nan
+    m = _DIAMETER.fullmatch(value)
+    return float(m.group(1).replace(",", ".")) if m else math.nan
+
+
+def crown_diameter_m(properties: dict) -> float | None:
+    """A tree's ``diameter_crown`` in metres from its OSM ``tags`` (an object, or a JSON string), or from
+    the properties themselves when there are no tags; None when missing, unclear or outside
+    (0, MAX_DIAMETER_M]."""
+    tags = properties.get("tags", properties)
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except ValueError:
+            tags = {}
+    diameter = parse_diameter(tags.get("diameter_crown")) if isinstance(tags, dict) else math.nan
+    return diameter if 0 < diameter <= MAX_DIAMETER_M else None
+
+
+def _point_crown_ring(position: list, diameter_m: float) -> tuple[np.ndarray, str | None]:
+    """The lon/lat ring of a square crown ``diameter_m`` on the ground, centred on a Point's position."""
+    try:
+        lon, lat = (float(v) for v in position[:2])
+    except (TypeError, ValueError):
+        return np.empty((0, 2)), "malformed position"
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        return np.empty((0, 2)), "non-finite coordinate"
+    x, y = _TO_3857.transform(lon, lat)
+    half = diameter_m / 2 / math.cos(math.radians(lat))  # ground metres are 1 / cos(lat) longer in 3857
+    xs = [x - half, x + half, x + half, x - half, x - half]
+    ys = [y - half, y - half, y + half, y + half, y - half]
+    return np.column_stack(_TO_4326.transform(xs, ys)), None
+
+
 def label_rings(geojson: dict, label: int = 1) -> list[np.ndarray]:
     """Exterior rings of the labels of class ``label`` (1 tree, 2 tree_group) as (k, 2) float64 lon/lat
     arrays, one per polygon part for trees. A tree_group is one group however many parts it has (canopy
     minus the crowns inside can fall apart), so its parts' rings are stacked into one array per feature.
+    A tree Point (OSM maps trees as points) is a square crown of its ``diameter_crown`` metres.
 
-    Features of another class are dropped silently; empty, unsupported and invalid geometries are skipped
-    with a warning.
+    Features of another class are dropped silently; empty, unsupported and invalid geometries, and tree
+    Points without a usable diameter, are skipped with a warning.
     """
     rings = []
     for i, feature in enumerate(geojson.get("features", [])):
-        if _label_of(feature.get("properties") or {}) != label:
+        properties = feature.get("properties") or {}
+        if _label_of(properties) != label:
             continue
         geometry = feature.get("geometry")
         if not geometry or not geometry.get("coordinates"):
             logger.warning(f"label feature {i}: empty geometry, skipped")
             continue
         kind = geometry.get("type")
+        if kind == "Point":
+            if label != 1:
+                logger.warning(f"label feature {i}: a {CLASSES[label - 1]} Point has no extent, skipped")
+                continue
+            diameter = crown_diameter_m(properties)
+            if diameter is None:
+                logger.warning(f"label feature {i}: tree Point without a usable diameter_crown, skipped")
+                continue
+            ring, why = _point_crown_ring(geometry["coordinates"], diameter)
+            if why:
+                logger.warning(f"label feature {i}: invalid geometry ({why}), skipped")
+                continue
+            rings.append(ring)
+            continue
         if kind == "Polygon":
             parts = [geometry["coordinates"]]
         elif kind == "MultiPolygon":

@@ -10,6 +10,7 @@ from fair_trees.dataset import (
     label_rings,
     labels_to_boxes,
     load_fair_dataset,
+    load_geojson,
     load_regions,
     rasterize_mask,
 )
@@ -57,6 +58,68 @@ def test_label_rings_by_class(geo, origin):
     assert len(label_rings(fc)) == 3
     np.testing.assert_allclose(labels_to_boxes(fc, origin, label=2), [[60, 0, 70, 10]], atol=1e-6)
     assert label_rings(fc, label=3) == []
+
+
+def _point(geo, xy_px, **properties):
+    geometry = {"type": "Point", "coordinates": geo.px_to_4326([xy_px])[0]}
+    return {"type": "Feature", "geometry": geometry, "properties": properties}
+
+
+def _half_side_px(geo, diameter_m, xy_px):
+    # a diameter in metres on the ground is 1 / cos(lat) longer in Web Mercator
+    lat = geo.px_to_4326([xy_px])[0][1]
+    return diameter_m / 2 / np.cos(np.radians(lat)) / geo.res20
+
+
+def test_tree_point_is_a_square_of_its_crown_diameter(geo, origin):
+    # as fAIr writes OSM labels: the OSM tags as an object, the class number stamped as `label`
+    tree = _point(geo, (50, 80), tags={"natural": "tree", "diameter_crown": "4"}, label=1)
+    h = _half_side_px(geo, 4.0, (50, 80))
+    fc = {"type": "FeatureCollection", "features": [tree]}
+    np.testing.assert_allclose(labels_to_boxes(fc, origin), [[50 - h, 80 - h, 50 + h, 80 + h]], atol=1e-3)
+
+
+@pytest.mark.parametrize(
+    "properties, diameter_m",
+    [
+        ({"tags": {"diameter_crown": "3.5 m"}}, 3.5),
+        ({"tags": {"diameter_crown": "3,5m"}}, 3.5),
+        ({"tags": {"diameter_crown": 6}}, 6.0),
+        ({"tags": json.dumps({"diameter_crown": "2"})}, 2.0),  # tags as a JSON string, as HOT's parquet has
+        ({"diameter_crown": "5"}, 5.0),  # the tags flattened into the properties
+    ],
+)
+def test_crown_diameter_read_from_tags_in_any_form(geo, origin, properties, diameter_m):
+    fc = {"type": "FeatureCollection", "features": [_point(geo, (100, 100), **properties)]}
+    (box,) = labels_to_boxes(fc, origin)
+    np.testing.assert_allclose(box[2] - box[0], 2 * _half_side_px(geo, diameter_m, (100, 100)), atol=1e-3)
+
+
+@pytest.mark.parametrize("diameter", [None, "big", "0", "-2", "31", "25231 m"])
+def test_tree_point_without_a_usable_diameter_skipped_with_warning(geo, diameter, caplog):
+    tags = {"natural": "tree"} if diameter is None else {"natural": "tree", "diameter_crown": diameter}
+    fc = {"type": "FeatureCollection", "features": [_point(geo, (100, 100), tags=tags)]}
+    with caplog.at_level(logging.WARNING, logger="fair_trees.dataset"):
+        assert label_rings(fc) == []
+    assert "diameter_crown" in caplog.text
+
+
+def test_tree_group_point_skipped_with_warning(geo, caplog):
+    group = _point(geo, (100, 100), tags={"diameter_crown": "20"}, label=2)
+    fc = {"type": "FeatureCollection", "features": [group]}
+    with caplog.at_level(logging.WARNING, logger="fair_trees.dataset"):
+        assert label_rings(fc, label=2) == []
+    assert "Point" in caplog.text
+
+
+def test_fair_point_dataset_labels_trees(write_oam_chip, tmp_path, geo):
+    chips = [write_oam_chip(X0, Y0)]
+    labels = tmp_path / "labels.geojson"
+    tree = _point(geo, (50, 80), tags={"natural": "tree", "diameter_crown": "4"}, label=1)
+    labels.write_text(json.dumps({"type": "FeatureCollection", "features": [tree]}))
+    (region,) = load_fair_dataset(chips, labels)
+    assert region.classes == ("tree",)
+    assert len(label_rings(load_geojson(region.labels_path))) == 1
 
 
 def test_region_classes_default_and_read(write_region):
