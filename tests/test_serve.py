@@ -237,6 +237,36 @@ def test_request_exceeding_window_budget_is_rejected(write_oam_chip, fake_sessio
     assert len(s.calls) == 1
 
 
+def _eq_chip(write_oam_chip, z):
+    """A chip of the tile whose north-west corner is (lon 0, lat 0) at zoom ``z``."""
+    return write_oam_chip(2 ** (z - 1), 2 ** (z - 1), z)
+
+
+def test_z18_imagery_serves_without_a_warning(write_oam_chip, fake_session, tmp_path, caplog):
+    # fAIr's CI smoke test predicts on z18 chips
+    _eq_chip(write_oam_chip, 18)
+    with caplog.at_level(logging.WARNING, logger="fair_trees.serve"):
+        predict_session(fake_session(), tmp_path, None)
+    assert "coarser" not in caplog.text
+
+
+def test_imagery_coarser_than_training_warns(write_oam_chip, fake_session, tmp_path, caplog):
+    _eq_chip(write_oam_chip, 17)
+    s = fake_session()
+    with caplog.at_level(logging.WARNING, logger="fair_trees.serve"):
+        predict_session(s, tmp_path, None)
+    assert "coarser" in caplog.text and "z17" in caplog.text
+    assert s.calls
+
+
+def test_imagery_too_coarse_for_crowns_is_refused(write_oam_chip, fake_session, tmp_path):
+    _eq_chip(write_oam_chip, 16)
+    s = fake_session()
+    with pytest.raises(ValueError, match=r"z16.*m/px"):
+        predict_session(s, tmp_path, None)
+    assert s.calls == []
+
+
 def test_only_bad_chips_raise_with_reason(write_oam_chip, fake_session, tmp_path):
     write_oam_chip(count=1)
     with pytest.raises(ValueError, match="3 bands"):
