@@ -82,6 +82,7 @@ class TrainParams:
     batch_size: int = 4
     samples_per_epoch: int | None = None  # None = number of train chips
     schedule: str = "cosine"
+    max_grad_norm: float | None = None  # clip the gradient's total norm to this; None = no clipping
     patience: int = 3
     min_delta: float = 0.005
     amp: bool = True
@@ -331,6 +332,7 @@ _FLOAT_TRAIN_FIELDS = (
     "source_alpha",
     "biome_alpha",
     "empty_crop_cap",
+    "max_grad_norm",
 )
 
 
@@ -372,6 +374,8 @@ def parse_train_params(hp: Mapping | None) -> TrainParams:
         _at_least("region_repeat_cap", p.region_repeat_cap, 1)
     if p.empty_crop_cap is not None:
         _in_range("empty_crop_cap", p.empty_crop_cap, 0, 1)
+    if p.max_grad_norm is not None:
+        _at_least("max_grad_norm", p.max_grad_norm, 0, strict=True)
     if p.num_classes is not None:
         _in_range("num_classes", p.num_classes, 1, len(CLASSES))
     if p.l2sp_alpha > 0:

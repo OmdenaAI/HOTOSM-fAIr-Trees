@@ -124,6 +124,29 @@ def test_early_stopping_best_and_logs(monkeypatch, regions, weights, tmp_path):
     assert len(rows) == 4 and rows[2]["improved"] == "True"
 
 
+class SteepScript(Script):
+    """A loss whose gradient on the class logits' weight is 1000 everywhere."""
+
+    def forward_loss(self, model, images, image_sizes, targets):
+        w = model.head.classification_head.cls_logits.weight
+        return {"classification": (w * 1000).sum(), "bbox_regression": (w * 0).sum()}
+
+
+def _weight_change(weights, best):
+    start, end = torch.load(weights, weights_only=True), torch.load(best, weights_only=True)
+    return max((end[k].float() - start[k].float()).norm().item() for k in start)
+
+
+def test_max_grad_norm_clips_the_step(monkeypatch, regions, weights, tmp_path):
+    cfg = dataclasses.replace(CFG, epochs=1, weight_decay=0.0, learning_rate=1e-3)
+    free = _run(monkeypatch, SteepScript([0.5]), regions, weights, tmp_path / "free", cfg=cfg)
+    clipped_cfg = dataclasses.replace(cfg, max_grad_norm=1e-3)
+    clipped = _run(monkeypatch, SteepScript([0.5]), regions, weights, tmp_path / "clip", cfg=clipped_cfg)
+    # 3 SGD steps with momentum 0.9 move a weight at most lr * max_grad_norm * (1 + 1.9 + 2.71)
+    assert _weight_change(weights, clipped.best_checkpoint) < 1e-3 * 1e-3 * 5.61 * 1.01
+    assert _weight_change(weights, free.best_checkpoint) > 1.0
+
+
 @pytest.mark.parametrize("ckpt_every_min", [1e-9, 1e3])  # mid-epoch checkpoints vs epoch-end only
 def test_resume_replays_the_same_samples(monkeypatch, regions, weights, tmp_path, ckpt_every_min):
     cfg = dataclasses.replace(CFG, ckpt_every_min=ckpt_every_min)

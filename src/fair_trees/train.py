@@ -680,6 +680,11 @@ def train(
                 raise FloatingPointError(f"non-finite loss at epoch {epoch} step {s.step}")
             opt.zero_grad(set_to_none=True)
             scaler.scale(loss).backward()
+            if cfg.max_grad_norm is not None:
+                scaler.unscale_(opt)  # clip the true gradient, not the loss-scaled one
+                torch.nn.utils.clip_grad_norm_(
+                    [p for g in opt.param_groups for p in g["params"]], cfg.max_grad_norm
+                )
             scaler.step(opt)
             scaler.update()
             sched.step()
