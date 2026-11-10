@@ -356,10 +356,12 @@ def load_regions(root: Path) -> list[Region]:
 def load_fair_dataset(chips: Sequence[Path], labels_path: Path, *, split: str = "train") -> list[Region]:
     """Regions for a mapper's own chips: one per zoom and 8-connected tile component.
 
-    The regions label tree_group too when the labels file holds any tree_group (``label: 2``) feature.
+    The regions label the classes the labels file holds a feature of (tree when it holds none). A fAIr
+    dataset has one geometry type, so tree points come without tree_groups and tree_group polygons
+    without trees: a class that was not mapped is unlabelled, not absent.
     """
-    has_groups = bool(label_rings(load_geojson(labels_path), 2))
-    classes = CLASSES if has_groups else ("tree",)
+    labels = load_geojson(labels_path)
+    classes = tuple(name for k, name in enumerate(CLASSES) if label_rings(labels, k + 1)) or ("tree",)
     named, xyzs = [], []
     for path in map(Path, chips):
         xyz = parse_oam_name(path)

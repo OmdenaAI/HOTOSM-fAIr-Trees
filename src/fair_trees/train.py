@@ -47,7 +47,15 @@ from fair_trees.evaluate import (
     pick_threshold,
     region_units,
 )
-from fair_trees.params import CLASSES, WINDOW_FIELDS, InferenceParams, TrainParams, parse_train_params
+from fair_trees.params import (
+    CLASSES,
+    WINDOW_FIELDS,
+    InferenceParams,
+    TrainParams,
+    parse_class_thresholds,
+    parse_model_windows,
+    parse_train_params,
+)
 from fair_trees.preprocess import preprocess_window
 from fair_trees.serve import RunFn
 
@@ -64,6 +72,11 @@ NUM_ANCHORS = 9  # 3 sizes x 3 aspect ratios per location
 def checkpoint_num_classes(state: Mapping[str, torch.Tensor]) -> int:
     """Classes of a RetinaNet state dict: classification-head output rows per anchor."""
     return state[CLS_WEIGHT].shape[0] // NUM_ANCHORS
+
+
+def weights_num_classes(weights: Path) -> int:
+    """Classes of the RetinaNet state dict saved at ``weights``."""
+    return checkpoint_num_classes(torch.load(weights, map_location="cpu", weights_only=True))
 
 
 def _add_group_rows(state: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -415,15 +428,60 @@ class TrainResult:
     last_checkpoint: Path
     best_metrics: dict
     history: list[dict]
+    # the start weights' own thresholds for the model's classes (``thresholds.json`` beside them)
+    start_thresholds: dict[str, float] = dataclasses.field(default_factory=dict)
 
     @property
     def thresholds(self) -> dict[str, float]:
-        """The best epoch's val-picked operating threshold per class (what ``thresholds.json`` holds)."""
-        return _thresholds(self.best_metrics)
+        """The operating threshold per class (what ``thresholds.json`` holds): the best epoch's val pick,
+        else the start weights' own threshold for a class val could not score."""
+        return _serving_thresholds(self.best_metrics, self.start_thresholds)
 
 
 def _thresholds(metrics: Mapping) -> dict[str, float]:
     return {c: float(metrics[f"val/threshold_{c}"]) for c in CLASSES if f"val/threshold_{c}" in metrics}
+
+
+def _serving_thresholds(metrics: Mapping, start: Mapping[str, float]) -> dict[str, float]:
+    picked = _thresholds(metrics)
+    return {c: picked.get(c, start.get(c)) for c in CLASSES if c in picked or c in start}
+
+
+def _window_field(name: str) -> str:
+    """The ``InferenceParams`` window a class is predicted with, and its threshold picked at."""
+    return WINDOW_FIELDS[CLASSES.index(name)]
+
+
+def _beside(weights: Path, name: str) -> str | None:
+    """The text of the file ``name`` beside the start weights (a run writes its own beside ``best.pt``), or
+    None."""
+    path = Path(weights).with_name(name)
+    return path.read_text() if path.is_file() else None
+
+
+def _unlabelled_classes(
+    classes: Sequence[str], start_classes: Sequence[str], train_regions: Sequence[Region]
+) -> list[str]:
+    """The model's classes that no train region labels: they get no loss term, so the model keeps the
+    start weights' detection of them.
+
+    Refused: such a class that the start weights lack (its new rows would ship untrained), and data that
+    labels none of the model's classes (nothing to learn).
+    """
+    labelled = {name for r in train_regions for name in r.classes}
+    unlabelled = [name for name in classes if name not in labelled]
+    new = [name for name in unlabelled if name not in start_classes]
+    if new:
+        raise ValueError(
+            f"the start weights have no {new[0]} class and no train region labels {new[0]}: its new rows "
+            f"would ship untrained. Use data with {new[0]} labels, or leave num_classes unset."
+        )
+    if len(unlabelled) == len(classes):
+        raise ValueError(
+            f"no train region labels a class of the model: it has {list(classes)}, "
+            f"the regions label {sorted(labelled)}"
+        )
+    return unlabelled
 
 
 def _fresh_sums() -> dict:
@@ -466,10 +524,11 @@ def _validate(
 ) -> dict:
     """Val metrics through the serving decode path; puts the model back in train mode.
 
-    ``units`` maps a class name to its units. Each (source, class) is scored on its own and the scores are
-    the equal-weight means over them (with ``f1_max_<source>`` / ``ap40_<source>`` for trees and
-    ``f1_max_<source>_tree_group`` / ``ap40_<source>_tree_group`` for groups alongside when there are
-    several), so neither a large source nor one class drowns out the rest in early stopping.
+    ``units`` maps each class of the model to its units (none for a class val does not label). Each
+    (source, class) is scored on its own and the scores are the equal-weight means over them (with
+    ``f1_max_<source>`` / ``ap40_<source>`` for trees and ``f1_max_<source>_tree_group`` /
+    ``ap40_<source>_tree_group`` for groups alongside when there are several), so neither a large source
+    nor one class drowns out the rest in early stopping.
     ``threshold_<class>`` is the operating threshold picked on val (``pick_threshold``; the mean over
     sources, snapped to ``PICK_THRESHOLDS``), with the prior for a model of that many classes.
     """
@@ -566,6 +625,10 @@ def train(
 
     The epoch plan is regenerated from (seed, epoch) on resume, so an interrupted run trains on the same
     samples as an uninterrupted one. A finished run returns its result without training.
+
+    A class of the start weights that no train region labels is kept as it is: it gets no loss term, val
+    does not score it, and it is served at the threshold and window in the ``thresholds.json`` and
+    ``windows.json`` beside `weights`. So a tree and tree_group model fine-tunes on tree-only data.
     """
     if not train_regions:
         raise ValueError("no train regions")
@@ -576,12 +639,16 @@ def train(
     model = build_model(weights, trainable_layers=cfg.trainable_layers, num_classes=cfg.num_classes)
     model = model.to(device).train()
     num_classes = model.head.classification_head.num_classes
-    if num_classes == 2 and not any("tree_group" in r.classes for r in train_regions):
-        # the group rows would get no loss term and ship untrained
-        raise ValueError(
-            "a two-class model needs train regions that label tree_group (label 2); none do. "
-            "Use a tree-only model, or data with tree_group labels."
+    classes = CLASSES[:num_classes]
+    for name in _unlabelled_classes(classes, CLASSES[: weights_num_classes(weights)], train_regions):
+        logger.warning(
+            f"no train region labels {name}: the model keeps the start weights' {name} detection "
+            "(no loss term here) and threshold"
         )
+    start_thresholds = dict(
+        zip(classes, parse_class_thresholds(_beside(weights, "thresholds.json")), strict=False)
+    )
+    start_windows = parse_model_windows(_beside(weights, "windows.json"))
     ref = snapshot(model)
     w0 = state_hash(ref)
     chash = config_hash(cfg)
@@ -620,7 +687,7 @@ def train(
         )
         s = _LoopState(**{f.name: state[f.name] for f in dataclasses.fields(_LoopState)})
         if s.done:
-            return TrainResult(out_dir / "best.pt", last_path, s.best_metrics, s.history)
+            return TrainResult(out_dir / "best.pt", last_path, s.best_metrics, s.history, start_thresholds)
         model.load_state_dict(state["model"])
         opt.load_state_dict(state["optimizer"])
         sched.load_state_dict(state["scheduler"])
@@ -632,11 +699,15 @@ def train(
         _supersede(out_dir)
 
     # after the resume check, so a finished run returns without reading the val set
-    val_units = {"tree": region_units(val_regions, zooms=val_zooms)} if val_regions else {}
-    if num_classes == 2 and any("tree_group" in r.classes for r in val_regions):
-        val_units["tree_group"] = region_units(val_regions, zooms=val_zooms, label=2)
-    if not val_regions:
-        logger.warning("no val regions: every epoch counts as an improvement and best.pt is the last epoch")
+    val_units = {
+        name: region_units(val_regions, zooms=val_zooms, label=k + 1) for k, name in enumerate(classes)
+    }
+    if not any(val_units.values()):
+        val_units = {}
+        logger.warning(
+            "no val region labels a class of the model: every epoch counts as an improvement and best.pt "
+            "is the last epoch"
+        )
 
     def save_state(name: str) -> Path:
         state = {
@@ -729,8 +800,12 @@ def train(
             s.patience_left = cfg.patience
             s.best_metrics = dict(metrics)
             save_file(model.state_dict(), out_dir, "best.pt", tmp_dir=tmp_dir, keep_last=None)
-            if thresholds := _thresholds(s.best_metrics):
+            if thresholds := _serving_thresholds(s.best_metrics, start_thresholds):
                 windows = {name: getattr(val_params, name) for name in WINDOW_FIELDS}
+                for name in thresholds.keys() - _thresholds(s.best_metrics).keys():
+                    # not picked on this val set: the threshold holds at the start weights' window
+                    field = _window_field(name)
+                    windows[field] = start_windows.get(field, windows[field])
                 for name, values in (("windows.json", windows), ("thresholds.json", thresholds)):
                     part = out_dir / f"{name}.part"
                     part.write_text(json.dumps(values, indent=2))
@@ -760,7 +835,7 @@ def train(
             on_epoch_end({k: float(v) for k, v in {**metrics, **stats}.items()}, epoch)
         if s.patience_left == 0:
             break
-    return TrainResult(out_dir / "best.pt", last_path, s.best_metrics, s.history)
+    return TrainResult(out_dir / "best.pt", last_path, s.best_metrics, s.history, start_thresholds)
 
 
 def fair_data_hash(train_chips: Sequence[Path], val_chips: Sequence[Path], labels_path: Path) -> str:

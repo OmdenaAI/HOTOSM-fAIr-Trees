@@ -154,12 +154,16 @@ def test_region_classes_default_and_read(write_region):
 def test_fair_dataset_classes_follow_labels(write_oam_chip, tmp_path, geo):
     chips = [write_oam_chip(X0, Y0)]
     labels = tmp_path / "labels.geojson"
-    fc = geo.feature_collection([geo.box_polygon((10, 10, 20, 20))])
-    labels.write_text(json.dumps(fc))
-    assert load_fair_dataset(chips, labels)[0].classes == ("tree",)
-    fc["features"] += geo.feature_collection([geo.box_polygon((30, 30, 90, 90))], label=2)["features"]
-    labels.write_text(json.dumps(fc))
-    assert load_fair_dataset(chips, labels)[0].classes == CLASSES
+    trees = geo.feature_collection([geo.box_polygon((10, 10, 20, 20))])["features"]
+    groups = geo.feature_collection([geo.box_polygon((30, 30, 90, 90))], label=2)["features"]
+    for features, classes in (
+        (trees, ("tree",)),
+        (trees + groups, CLASSES),
+        (groups, ("tree_group",)),  # trees are not mapped there, which is not the same as no trees
+        ([], ("tree",)),
+    ):
+        labels.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+        assert load_fair_dataset(chips, labels)[0].classes == classes
 
 
 def test_multipolygon_split_into_parts(geo, origin):

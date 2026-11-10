@@ -34,6 +34,17 @@ def weights(tmp_path_factory):
     return path
 
 
+@pytest.fixture(scope="module")
+def weights_k2(tmp_path_factory):
+    """Two-class start weights with the thresholds and windows a fine-tune writes beside its best.pt."""
+    d = tmp_path_factory.mktemp("weights_k2")
+    torch.manual_seed(0)
+    torch.save(T.build_model(None, trainable_layers=0, num_classes=2).state_dict(), d / "best.pt")
+    (d / "thresholds.json").write_text(json.dumps({"tree": 0.2, "tree_group": 0.15}))
+    (d / "windows.json").write_text(json.dumps({"window_m": 60.0, "group_window_m": 100.0}))
+    return d / "best.pt"
+
+
 @pytest.fixture
 def regions(write_region):
     d = write_region("t", tiles=((0, 0), (1, 0)), boxes_px=[(30, 30, 60, 70)])
@@ -276,12 +287,113 @@ def test_fine_tune_crops_up_to_80_m_for_one_or_two_classes(
     assert seen == [(30.0, 80.0), (30.0, 80.0), (30.0, 80.0), (30.0, 60.0)]
 
 
-def test_two_classes_without_group_labels_are_refused(monkeypatch, regions, weights, tmp_path):
+def test_new_group_class_without_group_labels_is_refused(monkeypatch, regions, weights, tmp_path):
     script = Script([0.1])
-    cfg = dataclasses.replace(CFG, num_classes=2)
+    cfg = dataclasses.replace(CFG, num_classes=2)  # tree-only start weights: the group rows would be new
     with pytest.raises(ValueError, match="tree_group"):
         _run(monkeypatch, script, regions, weights, tmp_path / "run", cfg=cfg)
     assert script.calls == 0 and not (tmp_path / "run").exists()
+
+
+def _with(script, seen=None, **extra):
+    """`script.validate` that also records how many units each class got and adds `extra` metrics."""
+    validate = script.validate
+
+    def wrapped(model, device, units, params, epoch):
+        if seen is not None:
+            seen.append({name: len(us) for name, us in units.items()})
+        return validate(model, device, units, params, epoch) | extra
+
+    script.validate = wrapped
+    return script
+
+
+ONE_EPOCH = dataclasses.replace(CFG, epochs=1)
+
+
+def test_trained_group_class_is_kept_on_tree_only_data(monkeypatch, regions, weights_k2, tmp_path, caplog):
+    seen = []
+    script = _with(Script([0.5]), seen)
+    with caplog.at_level(logging.WARNING, logger="fair_trees.train"):
+        res = _run(monkeypatch, script, regions, weights_k2, tmp_path / "run", cfg=ONE_EPOCH)
+    assert T.checkpoint_num_classes(torch.load(res.best_checkpoint, weights_only=True)) == 2
+    assert "tree_group" in caplog.text  # the log says the group class is kept, not trained
+    assert seen == [{"tree": 1, "tree_group": 0}]  # val scores trees only
+
+
+def test_unlabelled_class_keeps_the_start_weights_threshold_and_window(
+    monkeypatch, regions, weights_k2, tmp_path
+):
+    out = tmp_path / "run"
+    script = _with(Script([0.5]), threshold_tree=0.25)
+    res = _run(monkeypatch, script, regions, weights_k2, out, cfg=ONE_EPOCH)
+    expected = {"tree": pytest.approx(0.25), "tree_group": pytest.approx(0.15)}
+    assert res.thresholds == expected
+    assert json.loads((out / "thresholds.json").read_text()) == expected
+    # trees were picked at the val window (40 m); the group threshold holds at the start weights' window
+    assert json.loads((out / "windows.json").read_text()) == {"window_m": 40.0, "group_window_m": 100.0}
+    again = _run(monkeypatch, Script([0.9]), regions, weights_k2, out, cfg=ONE_EPOCH)  # the finished run
+    assert again.thresholds == expected
+
+
+def test_tree_only_val_of_a_two_class_model_uses_the_two_class_prior(
+    monkeypatch, regions, weights_k2, tmp_path
+):
+    _stub_reports(monkeypatch, {"src": (0.4, 0.3)})  # too few val boxes to pick from: the prior
+    monkeypatch.setattr(T, "forward_loss", Script([]).forward_loss)
+    res = T.train(
+        ONE_EPOCH,
+        *regions,
+        weights=weights_k2,
+        out_dir=tmp_path / "run",
+        num_workers=0,
+        tmp_dir=tmp_path / "t",
+    )
+    assert res.thresholds == {"tree": 0.2, "tree_group": 0.15}
+
+
+def _group_only_dataset(write_oam_chip, geo, tmp_path):
+    """Three z22 chips and the labels of a dataset whose one class is tree_group, as fAIr stamps them."""
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(3)]
+    labels = tmp_path / "labels.geojson"
+    group = geo.feature_collection([geo.box_polygon((5, 5, 60, 60))], tags={"natural": "tree_group"}, label=1)
+    labels.write_text(json.dumps(group))
+    return chips, labels
+
+
+def test_group_only_dataset_trains_groups_and_keeps_trees(
+    monkeypatch, write_oam_chip, geo, weights_k2, tmp_path
+):
+    chips, labels = _group_only_dataset(write_oam_chip, geo, tmp_path)
+    seen = []
+    script = _with(Script([0.5]), seen, threshold_tree_group=0.25)
+    monkeypatch.setattr(T, "forward_loss", script.forward_loss)
+    monkeypatch.setattr(T, "_validate", script.validate)
+    res = T.fine_tune(
+        chips[:2],
+        chips[2:],
+        labels,
+        {"epochs": 1, "batch_size": 2, "amp": False},
+        weights=weights_k2,
+        out_dir=tmp_path / "ft",
+        num_workers=0,
+        tmp_dir=tmp_path / "tmp",
+    )
+    assert seen == [{"tree": 0, "tree_group": 1}]
+    assert res.thresholds == {"tree": pytest.approx(0.2), "tree_group": pytest.approx(0.25)}
+    windows = {"window_m": 60.0, "group_window_m": 120.0}  # the start weights' tree window, val's for groups
+    assert json.loads((tmp_path / "ft" / "windows.json").read_text()) == windows
+
+
+def test_data_that_labels_no_class_of_the_model_is_refused(
+    monkeypatch, write_oam_chip, geo, weights, tmp_path
+):
+    chips, labels = _group_only_dataset(write_oam_chip, geo, tmp_path)
+    script = Script([0.5])
+    monkeypatch.setattr(T, "forward_loss", script.forward_loss)
+    with pytest.raises(ValueError, match="labels"):  # tree-only weights, tree_group-only labels
+        T.fine_tune(chips[:2], chips[2:], labels, {"epochs": 1}, weights=weights, out_dir=tmp_path / "ft")
+    assert script.calls == 0 and not (tmp_path / "ft").exists()
 
 
 def test_fine_tune_refuses_to_resume_on_changed_data(monkeypatch, write_oam_chip, geo, weights, tmp_path):
