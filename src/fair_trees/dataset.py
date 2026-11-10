@@ -65,8 +65,27 @@ def load_geojson(path: Path) -> dict:
     return json.loads(Path(path).read_text())
 
 
+def _osm_tags(properties: dict) -> dict:
+    """A feature's OSM tags: its ``tags`` (an object, or a JSON string), else the properties themselves."""
+    tags = properties.get("tags", properties)
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except ValueError:
+            return {}
+    return tags if isinstance(tags, dict) else {}
+
+
 def _label_of(properties: dict) -> int | None:
-    """A missing label is a tree (1); a present one must be the number 1 or 2 (tree_group), else None."""
+    """The class number of a label feature (1 tree, 2 tree_group).
+
+    Its OSM ``natural`` tag decides when that names a class: fAIr numbers ``label`` by the order a dataset
+    lists its classes, so a tree_group-only dataset arrives as ``label: 1``. Otherwise the ``label`` number
+    does: missing is a tree, and anything but 1 or 2 is None.
+    """
+    natural = _osm_tags(properties).get("natural")
+    if isinstance(natural, str) and natural in CLASSES:
+        return CLASSES.index(natural) + 1
     if "label" not in properties:
         return 1
     try:
@@ -112,16 +131,9 @@ def parse_diameter(value) -> float:
 
 
 def crown_diameter_m(properties: dict) -> float | None:
-    """A tree's ``diameter_crown`` in metres from its OSM ``tags`` (an object, or a JSON string), or from
-    the properties themselves when there are no tags; None when missing, unclear or outside
-    (0, MAX_DIAMETER_M]."""
-    tags = properties.get("tags", properties)
-    if isinstance(tags, str):
-        try:
-            tags = json.loads(tags)
-        except ValueError:
-            tags = {}
-    diameter = parse_diameter(tags.get("diameter_crown")) if isinstance(tags, dict) else math.nan
+    """A tree's ``diameter_crown`` in metres from its OSM tags (``_osm_tags``); None when missing, unclear
+    or outside (0, MAX_DIAMETER_M]."""
+    diameter = parse_diameter(_osm_tags(properties).get("diameter_crown"))
     return diameter if 0 < diameter <= MAX_DIAMETER_M else None
 
 

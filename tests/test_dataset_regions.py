@@ -60,6 +60,24 @@ def test_label_rings_by_class(geo, origin):
     assert label_rings(fc, label=3) == []
 
 
+@pytest.mark.parametrize(
+    "properties, label",
+    [
+        ({"tags": {"natural": "tree_group"}, "label": 1}, 2),  # fAIr stamps a group-only dataset's class as 1
+        ({"tags": {"natural": "tree"}, "label": 2}, 1),  # a dataset that lists tree_group before tree
+        ({"tags": json.dumps({"natural": "tree_group"}), "label": 1}, 2),  # tags as a JSON string
+        ({"natural": "tree_group"}, 2),  # the tags flattened into the properties
+        ({"tags": {"natural": "wood"}, "label": 2}, 2),  # natural names no class of ours: the number decides
+        ({"tags": {"building": "yes"}, "label": 1}, 1),  # no natural tag: the number decides
+        ({"tags": None, "label": 2}, 2),
+    ],
+)
+def test_osm_natural_tag_names_the_class_before_the_label_number(geo, properties, label):
+    feature = {"type": "Feature", "geometry": geo.box_polygon((0, 0, 10, 10)), "properties": properties}
+    fc = {"type": "FeatureCollection", "features": [feature]}
+    assert [len(label_rings(fc, k)) for k in (1, 2)] == [int(label == 1), int(label == 2)]
+
+
 def _point(geo, xy_px, **properties):
     geometry = {"type": "Point", "coordinates": geo.px_to_4326([xy_px])[0]}
     return {"type": "Feature", "geometry": geometry, "properties": properties}
