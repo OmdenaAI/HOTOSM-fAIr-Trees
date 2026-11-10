@@ -25,6 +25,27 @@ Tags: [V] verified (source code, checkpoint, dataset card, paper, or arithmetic 
 ## 4. Windows
 - A window is downscaled only when wider than 800 x GSD: z20 ~103-119 m, z21 ~52-60 m, z22 ~26-30 m [V].
 - The largest crown kept whole in one window is window - stride (20 m at 0.5 overlap) [V: arithmetic].
+- A box reaching into the edge band of a window side shared with another window is cut, so wherever it lies a
+  box is whole in some window when it is at most window x (overlap - 2 x band) wide. With the 0.05 band that
+  is 24 m for trees (60 m windows) and 48 m for tree groups (120 m) at 0.5 overlap, 9 m and 18 m at 0.25
+  [V: arithmetic].
+- Serving overlap, `hot-groups-crop80` at its picked thresholds, each setting paired over units against 0.5
+  overlap with `drop_edge` (`experiments.overlap_check`) [V: experiments/results/hot-groups-crop80/overlap_check_val.json
+  and overlap_check_hot-test.json]:
+  - 0.25 overlap runs half the windows (697 against 1,393 per km2 on HOT val) and costs trees nothing: F1
+    +0.000 [-0.004, +0.005] on HOT val, -0.002 [-0.006, +0.002] on HOT test.
+  - Tree groups at 0.25 lose 0.030 [0.018, 0.043] on val under `drop_edge`. `overlap` beats `drop_edge` there
+    by 0.022 [0.007, 0.037] on val and 0.013 [0.002, 0.023] on test, which leaves -0.008 [-0.019, +0.004] on
+    val and +0.007 [-0.006, +0.017] on test. At 0.5 overlap `overlap` loses 0.022 [0.008, 0.035] on val, so
+    the rule is chosen with the overlap.
+  - Below 0.25 trees lose: at 0.125, -0.047 [-0.056, -0.039] on val with the 0.05 band and -0.007
+    [-0.013, -0.002] with no band; at 0 overlap, -0.028 [-0.033, -0.023] with no band. No band costs trees
+    0.009 [0.005, 0.014] at 0.5 overlap.
+  - At 0.25 overlap the picked thresholds (tree 0.2, tree_group 0.15) are still the best of the pick grid on
+    val.
+  - The 0.5 overlap rows repeat `eval.json` to within 4 boxes per threshold (F1 within 0.0004 at the picked
+    thresholds). The labels read and the serving steps did not change for these regions in between [V]; the
+    two runs' GPUs are the likely cause [P].
 
 ## 5. Evaluation
 - Hungarian matching, IoU > 0.4; AP@0.4 over 101 confidence thresholds in [0.01, 1] [P].
