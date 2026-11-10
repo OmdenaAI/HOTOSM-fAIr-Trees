@@ -58,6 +58,7 @@ REQUIRED = {
         "window_m=",
         "run_recall_check",
         "run_small_crowns",
+        "run_overlap_check",
         "flush_and_unmount",
     ],
     "colab_convert_oamtcd.ipynb": [

@@ -432,6 +432,51 @@ def test_small_crowns_writes_both_sheets_and_the_rows(monkeypatch, setup, fake_s
     assert [b["bin_m"] for b in out["by_size"]] == [[0.0, 1.5], [1.5, 2.5]]
 
 
+def test_overlap_check_scores_each_class_of_a_run(monkeypatch, setup, write_region, fake_session):
+    from experiments.overlap_check import run_overlap_check
+
+    data, drive, _, bench = setup
+    _group_region(write_region, data)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(_k2_tree_and_group(fake_session)))
+    (drive / "runs" / "r1" / "thresholds.json").write_text(json.dumps({"tree": 0.125, "tree_group": 0.15}))
+    out = run_overlap_check("r1", drive_root=drive, data_root=data, benchmark=bench, overlaps=(0.5, 0.0))
+    trees, groups = out["classes"]["tree"], out["classes"]["tree_group"]
+    assert out["part"] == "val" and out["served"] == {"tree": 0.125, "tree_group": 0.15}
+    assert trees["unit_ids"] == ["g", "v"] and groups["unit_ids"] == ["g"]
+    assert trees["window_m"] == 40.0 and groups["window_m"] == 120.0
+    assert {s["overlap"] for s in trees["settings"]} == {0.5, 0.0}
+    assert json.loads((drive / "runs" / "r1" / "overlap_check_val.json").read_text()) == out
+    with pytest.raises(ValueError, match="hot-test"):
+        run_overlap_check("r1", part="hot-test", drive_root=drive, data_root=data, benchmark=bench)
+
+
+def test_overlap_check_of_a_tree_only_run_scores_trees_at_the_prior(monkeypatch, setup, fake_session):
+    from experiments.overlap_check import run_overlap_check
+
+    data, drive, _, bench = setup
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(fake_session()))
+    out = run_overlap_check("r1", drive_root=drive, data_root=data, benchmark=bench, overlaps=(0.0,))
+    assert list(out["classes"]) == ["tree"] and out["served"] == {"tree": 0.15}
+
+
+def test_overlap_check_scores_a_benchmark_regions_part(monkeypatch, setup, write_region, fake_session):
+    from experiments.overlap_check import run_overlap_check
+    from fair_trees.params import CLASSES
+
+    data, drive, _, bench = setup
+    write_region(
+        "t1", tiles=((8, 0),), root=data / "oamtcd", source="oamtcd", split="test",
+        groups_px=[GROUP_PX], classes=CLASSES,
+    )  # fmt: skip
+    _add_regions_part(bench)
+    monkeypatch.setattr(run, "_run_fn", lambda weights, device: ort_run_fn(_k2_tree_and_group(fake_session)))
+    out = run_overlap_check(
+        "r1", part="oamtcd", drive_root=drive, data_root=data, benchmark=bench, overlaps=(0.0,)
+    )
+    assert out["classes"]["tree"]["unit_ids"] == ["t1"] and out["classes"]["tree_group"]["unit_ids"] == ["t1"]
+    assert json.loads((drive / "runs" / "r1" / "overlap_check_oamtcd.json").read_text()) == out
+
+
 def test_evaluate_window_overrides_val_and_region_parts(monkeypatch, setup, write_region, fake_session):
     data, drive, _, bench = setup
     oamtcd = data / "oamtcd"
