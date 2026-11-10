@@ -12,6 +12,7 @@ from fair_trees.dataset import (
     load_fair_dataset,
     load_geojson,
     load_regions,
+    masked_crown_boxes,
     rasterize_mask,
 )
 from fair_trees.params import CLASSES
@@ -79,8 +80,7 @@ def test_osm_natural_tag_names_the_class_before_the_label_number(geo, properties
 
 
 def _point(geo, xy_px, **properties):
-    geometry = {"type": "Point", "coordinates": geo.px_to_4326([xy_px])[0]}
-    return {"type": "Feature", "geometry": geometry, "properties": properties}
+    return geo.point_feature(xy_px, **properties)
 
 
 def _half_side_px(geo, diameter_m, xy_px):
@@ -114,12 +114,50 @@ def test_crown_diameter_read_from_tags_in_any_form(geo, origin, properties, diam
 
 
 @pytest.mark.parametrize("diameter", [None, "big", "0", "-2", "31", "25231 m"])
-def test_tree_point_without_a_usable_diameter_skipped_with_warning(geo, diameter, caplog):
+def test_unusable_diameter_counts_as_no_size(geo, origin, diameter):
     tags = {"natural": "tree"} if diameter is None else {"natural": "tree", "diameter_crown": diameter}
     fc = {"type": "FeatureCollection", "features": [_point(geo, (100, 100), tags=tags)]}
-    with caplog.at_level(logging.WARNING, logger="fair_trees.dataset"):
-        assert label_rings(fc) == []
-    assert "diameter_crown" in caplog.text
+    (box,) = labels_to_boxes(fc, origin)  # the file's only tree: labelled at the default 4 m
+    np.testing.assert_allclose(box[2] - box[0], 2 * _half_side_px(geo, 4.0, (100, 100)), atol=1e-3)
+
+
+def _tree_points(geo, sized, unsized):
+    """A row of ``sized`` tree Points with a 6 m crown and a row of ``unsized`` ones without a diameter."""
+    tags = {"natural": "tree", "diameter_crown": "6"}
+    features = [_point(geo, (30 + 60 * k, 30), tags=tags, label=1) for k in range(sized)]
+    features += [_point(geo, (30 + 60 * k, 130), tags={"natural": "tree"}, label=1) for k in range(unsized)]
+    return {"type": "FeatureCollection", "features": features}
+
+
+@pytest.mark.parametrize("sized, unsized, masked", [(3, 1, True), (2, 2, True), (1, 3, False), (0, 2, False)])
+def test_unsized_tree_points_are_masked_when_most_have_a_size_else_labelled(
+    geo, origin, sized, unsized, masked
+):
+    fc = _tree_points(geo, sized, unsized)
+    labelled, hidden = labels_to_boxes(fc, origin), masked_crown_boxes(fc, origin)
+    assert (len(labelled), len(hidden)) == ((sized, unsized) if masked else (sized + unsized, 0))
+    default = hidden if masked else labelled[sized:]  # either way a 4 m square on the point
+    np.testing.assert_allclose(
+        default[:, 2] - default[:, 0], 2 * _half_side_px(geo, 4.0, (30, 130)), atol=1e-3
+    )
+    centres = [30 + 60 * k for k in range(unsized)]
+    np.testing.assert_allclose((default[:, 0] + default[:, 2]) / 2, centres, atol=1e-3)
+
+
+def test_fair_dataset_logs_how_unsized_tree_points_are_used(write_oam_chip, tmp_path, geo, caplog):
+    chips = [write_oam_chip(X0, Y0)]
+    labels = tmp_path / "labels.geojson"
+    for (sized, unsized), said in (
+        ((3, 1), "1 of 4 tree points"),
+        ((1, 3), "3 of 4 tree points"),
+        ((2, 0), ""),
+    ):
+        labels.write_text(json.dumps(_tree_points(geo, sized, unsized)))
+        caplog.clear()
+        with caplog.at_level(logging.WARNING, logger="fair_trees.dataset"):
+            load_fair_dataset(chips, labels)
+        assert said in caplog.text
+        assert ("masked" in caplog.text, "labelled" in caplog.text) == (sized == 3, sized == 1)
 
 
 def test_tree_group_point_skipped_with_warning(geo, caplog):
@@ -207,7 +245,8 @@ def test_altitude_is_dropped(geo, origin):
         ({"type": "Polygon", "coordinates": [[[0, 0], [0, 0], [0, 0], [0, 0]]]}, "invalid"),
         ({"type": "Polygon", "coordinates": [[[0, 0], [1e-5, 0], [0, 0]]]}, "invalid"),
         ({"type": "Polygon", "coordinates": [[[0, 0], [float("nan"), 0], [1e-5, 1e-5], [0, 0]]]}, "invalid"),
-        ({"type": "Point", "coordinates": [0, 0]}, "Point"),
+        ({"type": "Point", "coordinates": ["east", "north"]}, "invalid"),
+        ({"type": "Point", "coordinates": []}, "empty"),
     ],
 )
 def test_bad_geometries_skipped_with_warning(geometry, reason, caplog):
