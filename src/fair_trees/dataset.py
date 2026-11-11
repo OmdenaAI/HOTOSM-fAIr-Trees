@@ -334,6 +334,20 @@ def block_key(x: int, y: int, z: int, z_ref: int, block_size: int) -> tuple[int,
     return bx // block_size, by // block_size
 
 
+def reference_grid(zooms: Sequence[int], z_ref: int | None, block_size: int) -> tuple[int, int]:
+    """``(z_ref, block_size)`` of a block grid on which no tile of ``zooms`` straddles two blocks.
+
+    ``z_ref`` defaults to the lowest zoom. A tile coarser than ``z_ref`` covers several reference tiles but
+    ``block_key`` names only its north-west one, so the reference zoom drops to the coarsest tile and the
+    block grows to whole tiles of that zoom of at least the requested ground size. Otherwise both come back
+    unchanged.
+    """
+    z_min = min(zooms)
+    if z_ref is None or z_ref <= z_min:
+        return (z_min if z_ref is None else z_ref), block_size
+    return z_min, -(-block_size // (1 << (z_ref - z_min)))
+
+
 def spatial_split(
     chip_names: Sequence[str | Path],
     val_ratio: float,
@@ -345,10 +359,11 @@ def spatial_split(
     """Split chips into ``(train, val)`` by whole spatial blocks so neighbouring ground never straddles.
 
     Chips named ``OAM-x-y-z.<ext>`` are grouped by ``block_key`` at ``z_ref`` (default: the lowest zoom
-    present), so one piece of ground at several zooms lands on one side. Blocks go to val in a seeded
-    random order until about ``round(val_ratio * len(chip_names))`` chips are in val; train always keeps
-    at least one block. Chips whose name does not parse fill any remaining val quota. Items come back
-    unchanged and in input order.
+    present), so one piece of ground at several zooms lands on one side; a chip coarser than ``z_ref``
+    lowers the grid to its zoom (see ``reference_grid``). Blocks go to val in a seeded random order until
+    about ``round(val_ratio * len(chip_names))`` chips are in val; train always keeps at least one block.
+    Chips whose name does not parse fill any remaining val quota. Items come back unchanged and in input
+    order.
     """
     if not 0 < val_ratio < 1:
         raise ValueError(f"val_ratio must be in (0, 1), got {val_ratio}")
@@ -358,8 +373,8 @@ def spatial_split(
     parsed = [parse_oam_name(item) for item in chip_names]
     named = [i for i, p in enumerate(parsed) if p is not None]
     unnamed = [i for i, p in enumerate(parsed) if p is None]
-    if z_ref is None and named:
-        z_ref = min(parsed[i][2] for i in named)
+    if named:
+        z_ref, block_size = reference_grid([parsed[i][2] for i in named], z_ref, block_size)
 
     blocks: dict[tuple[int, int], list[int]] = {}
     for i in named:

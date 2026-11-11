@@ -10,7 +10,7 @@ from collections.abc import Sequence
 import numpy as np
 
 from experiments.leakage import box_distance_m, tile_boxes_3857
-from fair_trees.dataset import block_key
+from fair_trees.dataset import block_key, reference_grid
 from fair_trees.georef import tile_bounds_4326, true_gsd
 
 logger = logging.getLogger(__name__)
@@ -30,8 +30,9 @@ def block_split(
 ) -> list[str]:
     """Per tile, one of ``"train"``, ``"val"``, ``"test"`` or ``"drop"``.
 
-    Whole blocks go to one side, so a tile and its ground-overlapping tiles at other zooms never straddle.
-    Train tiles within ``buffer_m`` of any val or test tile are dropped.
+    Whole blocks go to one side, so a tile and its ground-overlapping tiles at other zooms never straddle; a
+    tile coarser than ``z_ref`` lowers the block grid to its zoom (see ``reference_grid``). Train tiles within
+    ``buffer_m`` of any val or test tile are dropped.
     """
     if block_size < 1:
         raise ValueError(f"block_size must be at least 1, got {block_size}")
@@ -42,6 +43,7 @@ def block_split(
     if not len(tiles):
         return []
 
+    z_ref, block_size = reference_grid([z for _, _, z in tiles], z_ref, block_size)
     blocks: dict[tuple[int, int], list[int]] = {}
     for i, (x, y, z) in enumerate(tiles):
         blocks.setdefault(block_key(x, y, z, z_ref, block_size), []).append(i)
@@ -79,8 +81,9 @@ def group_split(
 
     For scenes smaller than the buffer, where any block split leaves most of train within ``buffer_m`` of
     val. Scenes closer than ``buffer_m`` form one group; val is the proper subset of groups whose share of
-    the ground area (covered by distinct ``z_ref`` tiles) is closest to ``val_ratio``. Groups lie at least
-    ``buffer_m`` apart, so the buffer, still applied, drops nothing.
+    the ground area (covered by distinct ``z_ref`` tiles, a coarser tile covering every one under it) is
+    closest to ``val_ratio``. Groups lie at least ``buffer_m`` apart, so the buffer, still applied, drops
+    nothing.
     """
     if not 0 < val_ratio < 1:
         raise ValueError(f"need 0 < val_ratio < 1, got {val_ratio}")
@@ -124,7 +127,13 @@ def group_split(
 
     # ground area, not a tile count: a z_ref tile at 68 degrees covers 13% of one at the equator
     area = np.zeros(n_groups)
-    covered = {(g, block_key(x, y, z, z_ref, 1)) for g, (x, y, z) in zip(tile_group, tiles, strict=True)}
+    covered = set()
+    for g, (x, y, z) in zip(tile_group, tiles, strict=True):
+        if z >= z_ref:
+            covered.add((g, block_key(x, y, z, z_ref, 1)))
+        else:  # every z_ref tile under a coarser one
+            s = 1 << (z_ref - z)
+            covered.update((g, (x * s + i, y * s + j)) for j in range(s) for i in range(s))
     for g, (x, y) in covered:
         _, south, _, north = tile_bounds_4326(x, y, z_ref)
         area[g] += (256 * true_gsd(z_ref, (south + north) / 2)) ** 2
