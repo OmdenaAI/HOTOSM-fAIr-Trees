@@ -1,4 +1,5 @@
 import logging
+from itertools import combinations
 from pathlib import Path
 
 import pytest
@@ -68,6 +69,172 @@ def test_coarse_zooms_do_not_crash():
     for z_ref in (None, 19):
         train, val = spatial_split(names, 0.25, 0, z_ref=z_ref)
         assert sorted(train + val) == sorted(names)
+
+
+def _share_ground(a, b):
+    (xa, ya, za), (xb, yb, zb) = sorted((a, b), key=lambda t: t[2])
+    return (xb >> (zb - za), yb >> (zb - za)) == (xa, ya)
+
+
+def _coarse_and_z19(z):
+    """A 2 x 2 of zoom-``z`` tiles at an odd offset, every z19 tile under them, and a few z19 tiles beside."""
+    x0, y0 = (X0 >> (20 - z)) + 1, (Y0 >> (20 - z)) + 1
+    coarse = [(x0 + i, y0 + j, z) for j in (0, 1) for i in (0, 1)]
+    s = 1 << (19 - z)
+    fine = [(x * s + i, y * s + j, 19) for x, y, _ in coarse for j in range(s) for i in range(s)]
+    beside = [((x0 + 3) * s + i, y0 * s, 19) for i in range(3)]
+    return coarse + fine + beside
+
+
+def test_tile_coarser_than_z_ref_stays_with_the_tiles_it_contains():
+    names = ["OAM-1-1-16.tif", "OAM-12-8-19.tif"]  # the z16 tile contains the z19 one
+    train, val = spatial_split(names, 0.5, 0, z_ref=19)
+    assert val == [] and train == names
+
+
+@pytest.mark.parametrize("z", [17, 16])
+@pytest.mark.parametrize("block_size", [1, 2, 3, 4])
+def test_tiles_coarser_than_z_ref_never_straddle(z, block_size):
+    tiles = _coarse_and_z19(z)
+    names = _names(tiles)
+    held = 0
+    for seed in range(20):
+        _, val = spatial_split(names, 0.3, seed, block_size=block_size, z_ref=19)
+        val = set(val)
+        held += bool(val)
+        side = [n in val for n in names]
+        for i, j in combinations(range(len(tiles)), 2):
+            if side[i] != side[j]:
+                assert not _share_ground(tiles[i], tiles[j]), (seed, tiles[i], tiles[j])
+    assert held
+
+
+# Splits computed before tiles coarser than z_ref got their own handling. No tile here is coarser than
+# z_ref, so these must never change: the fAIr data hash covers each chip's split. One character per chip,
+# "v" for val and "." for train.
+def _golden_mixed():
+    t = [(X0 // 2 + i, Y0 // 2 + j, 19) for j in range(10) for i in range(10) if (i + 2 * j) % 5 == 0]
+    t += [(X0 + i, Y0 + j, 20) for j in range(12) for i in range(12) if (3 * i + j) % 4 == 1]
+    return t + [(2 * X0 + 3 + i, 2 * Y0 + 5 + j, 21) for j in range(6) for i in range(5)]
+
+
+def _golden_single():
+    return [(X0 + i, Y0 + j, 20) for j in range(9) for i in range(9) if (i * j) % 7 != 3]
+
+
+_GOLDEN = {
+    (
+        "mixed",
+        0,
+        1,
+        None,
+    ): ".vv...............vvvvv...v.v.v..v.v........v..v...v.v..v....v....v....v....v....v....",
+    (
+        "mixed",
+        0,
+        2,
+        None,
+    ): "..v...vvv.v.....v..v.v..v..v..v...v..v..v..vvv.vv.vv.vv...............................",
+    (
+        "mixed",
+        0,
+        4,
+        None,
+    ): ".v.v.vvv.v.v...vv.vv..v..v..v..v..v..v..v..v..v..v..v..v..............................",
+    (
+        "mixed",
+        0,
+        4,
+        19,
+    ): ".v.v.vvv.v.v...vv.vv..v..v..v..v..v..v..v..v..v..v..v..v..............................",
+    (
+        "mixed",
+        0,
+        3,
+        18,
+    ): ".vv..vv.vv.vv..vv.vv.vv.vv.vv.vv.vv.vv.vv.vv.vv.vv.vv.vv..............................",
+    (
+        "mixed",
+        1,
+        1,
+        None,
+    ): "v....vv.........v...vv.v.v..vv...v..v.vvvvvv.v........v..vvvv.vvvv.vvvv...............",
+    (
+        "mixed",
+        1,
+        2,
+        None,
+    ): "....v......v....................v..v..v..v....v..v..v..v...............vvvvvvvvvvvvvvv",
+    (
+        "mixed",
+        1,
+        4,
+        None,
+    ): "v.v.v........v......vv.vv.vv.vv.vv.vv.vv.vv.............vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+    (
+        "mixed",
+        1,
+        4,
+        19,
+    ): "v.v.v........v......vv.vv.vv.vv.vv.vv.vv.vv.............vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+    (
+        "mixed",
+        1,
+        3,
+        18,
+    ): "v..vv.....v...v.....v..v..v..v..v..v..v..v..v..v..v..v..vvvvvvvvvvvvvvvvvvvvvvvvvvvvvv",
+    (
+        "mixed",
+        2,
+        1,
+        None,
+    ): ".v.v.v....v.v.v.....v.v......v................v...v......vvvv.vvvv.vvvv...............",
+    (
+        "mixed",
+        2,
+        2,
+        None,
+    ): ".....v..vvvvvv.vv..v........................vvvvvvvvvvvv..............................",
+    (
+        "mixed",
+        2,
+        4,
+        None,
+    ): ".v.v.vvv.v.v.v.vvvvv..v..v..v..v..v..v..v..v..v..v..v..v..............................",
+    (
+        "mixed",
+        2,
+        4,
+        19,
+    ): ".v.v.vvv.v.v.v.vvvvv..v..v..v..v..v..v..v..v..v..v..v..v..............................",
+    (
+        "mixed",
+        2,
+        3,
+        18,
+    ): ".vvv.vvvvv.vvv.v.v...vv.vv.vv.vv.vv.vv.vv.vv.vv.vv.vv.vv..............................",
+    ("single", 0, 1, None): "...................v.v.v..vv.v..v...vv.vv...v.v.................vvv..vv..",
+    ("single", 0, 2, None): "....vv......vv.......v......vv..vv......vv.............v........vvv...vvv",
+    ("single", 0, 4, None): "....................................vvv....vvvv.....vvv.....vvvv....vvvv.",
+    ("single", 0, 3, 18): "....vvvvv...vvvvv....vvvv...vvvv.........................................",
+    ("single", 1, 1, None): "..v...v.......v......v..v.v..........vv......v.vv.v.v....v..v.....v.vv...",
+    ("single", 1, 2, None): "......vvv.....vvvvv.....vv........vv..v...v..vv........v........v........",
+    ("single", 1, 4, None): "vvvv.....vvv.....vvvv....vvv...........v.......v.......v........v........",
+    ("single", 1, 3, 18): "vvvv.....vvv.....vvvv....vvv....vvvv....vvv.....vvvv....vvvv.....vvv.....",
+    ("single", 2, 1, None): "...vvv.v...vv...v.vv.................vv.v...v....v....v.v...v.v..........",
+    ("single", 2, 2, None): "........v.......v.....vvv.....vv..vv......v..........vvv......vvv...vv...",
+    ("single", 2, 4, None): "....vvvvv...vvvvv....vvvv...vvvv.......v.......v.......v........vvvvvvvvv",
+    ("single", 2, 3, 18): "....................................vvvv...vvvvv....vvvv....vvvvv...vvvvv",
+}
+
+
+@pytest.mark.parametrize("key", sorted(_GOLDEN, key=repr))
+def test_split_without_coarser_tiles_is_unchanged(key):
+    tiles, seed, block_size, z_ref = key
+    names = _names(_golden_mixed() if tiles == "mixed" else _golden_single())
+    _, val = spatial_split(names, 0.25, seed, block_size=block_size, z_ref=z_ref)
+    val = set(val)
+    assert "".join("v" if n in val else "." for n in names) == _GOLDEN[key]
 
 
 def test_unnamed_chips_fill_leftover_val():
