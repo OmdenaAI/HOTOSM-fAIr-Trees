@@ -15,6 +15,7 @@ from fair_trees.preprocess import (
     mosaic_chips,
     preprocess,
     read_chip,
+    window_count,
     window_grid,
 )
 
@@ -46,6 +47,21 @@ def test_window_grid_covers_every_pixel(h, w, overlap):
         assert win.x + win.width <= w and win.y + win.height <= h
         covered[win.y : win.y + win.height, win.x : win.x + win.width] = True
     assert covered.all()
+
+
+@pytest.mark.parametrize("overlap", [0.0, 0.33, 0.5, 0.9])
+@pytest.mark.parametrize(
+    "gsd_m, window_m",
+    [(GSD_EQ, 5.0), (GSD_EQ, 40.0), (GSD_EQ, 200.0), (0.05, 5.0), (0.3, 37.5), (0.6, 120.0), (10.0, 5.0)],
+)
+def test_window_count_matches_window_grid(gsd_m, window_m, overlap):
+    win = max(1, round(window_m / gsd_m))
+    small = max(1, win - 1)
+    shapes = [(1, 1), (small, win), (win + 7, small), (win, win), (win + 1, win + 7), (3 * win + 5, 2 * win)]
+    shapes.append((256, 600))
+    for h, w in shapes:
+        expected = len(window_grid(h, w, gsd_m, window_m, overlap))
+        assert window_count(h, w, gsd_m, window_m, overlap) == expected, (h, w)
 
 
 def test_read_chip(write_oam_chip):
