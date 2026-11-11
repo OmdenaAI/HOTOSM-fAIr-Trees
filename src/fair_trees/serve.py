@@ -40,6 +40,7 @@ from fair_trees.preprocess import (
     is_blank,
     mosaic_chips,
     preprocess_window,
+    window_count,
     window_grid,
 )
 
@@ -169,7 +170,9 @@ def _window_count(mosaics: list[Mosaic], params: InferenceParams) -> int:
     """Windows the tree and group grids would run, counted as if both run (the model's classes are not
     known before the first window)."""
     return sum(
-        len(_grid(m, params, params.window_m)) + len(_grid(m, params, params.group_window_m)) for m in mosaics
+        window_count(*m.rgb.shape[:2], m.gsd_m, window_m, params.window_overlap)
+        for m in mosaics
+        for window_m in (params.window_m, params.group_window_m)
     )
 
 
