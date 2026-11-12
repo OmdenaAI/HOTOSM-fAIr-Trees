@@ -396,6 +396,72 @@ def test_data_that_labels_no_class_of_the_model_is_refused(
     assert script.calls == 0 and not (tmp_path / "ft").exists()
 
 
+def _box(geo, box_px, **properties):
+    return geo.feature_collection([geo.box_polygon(box_px)], **properties)["features"][0]
+
+
+def _sized_tree(geo, xy_px):
+    return geo.point_feature(xy_px, tags={"natural": "tree", "diameter_crown": "6"})
+
+
+FAR_PX = (2000, 2000, 2010, 2010)  # z20 pixels: tiles south-east of every chip below
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        pytest.param(lambda geo: [_box(geo, FAR_PX)], id="outside-every-chip"),
+        pytest.param(lambda geo: [_box(geo, (200, 20, 210, 30))], id="on-the-val-chip-only"),
+        pytest.param(
+            # three of four trees have a size, so the unsized one on the train chips is masked, not labelled
+            lambda geo: (
+                [_sized_tree(geo, (2000 + 20 * i, 2000)) for i in range(3)]
+                + [geo.point_feature((20, 20), tags={"natural": "tree"})]
+            ),
+            id="only-a-masked-point-on-the-chips",
+        ),
+        pytest.param(
+            # a tree-only model trains no tree_group: the group on the chips is no label for it
+            lambda geo: [_box(geo, FAR_PX), _box(geo, (5, 5, 60, 60), label=2)],
+            id="only-a-group-on-the-chips-of-a-tree-only-model",
+        ),
+    ],
+)
+def test_labels_on_no_train_chip_are_refused(monkeypatch, write_oam_chip, geo, weights, tmp_path, features):
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(4)]  # z20 pixels x 0..256, y 0..64
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps({"type": "FeatureCollection", "features": features(geo)}))
+    script = Script([0.5])
+    monkeypatch.setattr(T, "forward_loss", script.forward_loss)
+    monkeypatch.setattr(T, "_validate", script.validate)
+    with pytest.raises(
+        ValueError, match="no label falls on any train chip.*Check that the labels file covers"
+    ):
+        T.fine_tune(chips[:3], chips[3:], labels, {"epochs": 1}, weights=weights, out_dir=tmp_path / "ft")
+    assert script.calls == 0 and not (tmp_path / "ft").exists()
+
+
+def test_one_labelled_train_chip_among_empty_ones_trains(monkeypatch, write_oam_chip, geo, weights, tmp_path):
+    # two separate train mosaics (two regions) and a val chip; only the second mosaic has a label
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in (0, 1, 5, 6, 10)]
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps(geo.feature_collection([geo.box_polygon((330, 10, 340, 20))])))
+    script = Script([0.5])
+    monkeypatch.setattr(T, "forward_loss", script.forward_loss)
+    monkeypatch.setattr(T, "_validate", script.validate)
+    res = T.fine_tune(
+        chips[:4],
+        chips[4:],
+        labels,
+        {"epochs": 1, "batch_size": 2, "amp": False},
+        weights=weights,
+        out_dir=tmp_path / "ft",
+        num_workers=0,
+        tmp_dir=tmp_path / "tmp",
+    )
+    assert len(res.history) == 1 and script.calls == 2
+
+
 def test_fine_tune_refuses_to_resume_on_changed_data(monkeypatch, write_oam_chip, geo, weights, tmp_path):
     chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(4)]
     labels = tmp_path / "labels.geojson"

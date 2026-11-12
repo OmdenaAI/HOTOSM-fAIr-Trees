@@ -33,6 +33,7 @@ from fair_trees.dataset import (
     Region,
     RegionCache,
     SampleSpec,
+    any_label_on_chips,
     load_fair_dataset,
     load_sample,
     plan_epoch,
@@ -629,6 +630,9 @@ def train(
     A class of the start weights that no train region labels is kept as it is: it gets no loss term, val
     does not score it, and it is served at the threshold and window in the ``thresholds.json`` and
     ``windows.json`` beside `weights`. So a tree and tree_group model fine-tunes on tree-only data.
+
+    Refused before the first epoch: data with no label of the model's classes on any train chip
+    (``any_label_on_chips``), such as a labels file for another area; empty val chips are allowed.
     """
     if not train_regions:
         raise ValueError("no train regions")
@@ -644,6 +648,12 @@ def train(
         logger.warning(
             f"no train region labels {name}: the model keeps the start weights' {name} detection "
             "(no loss term here) and threshold"
+        )
+    cache = RegionCache(train_regions)
+    if not any_label_on_chips(train_regions, classes, cache):
+        raise ValueError(
+            "no label falls on any train chip: there is nothing to learn. Check that the labels file covers "
+            "the same area as the chips (GeoJSON in longitude and latitude)."
         )
     start_thresholds = dict(
         zip(classes, parse_class_thresholds(_beside(weights, "thresholds.json")), strict=False)
@@ -724,7 +734,6 @@ def train(
         return save_file(state, out_dir, name, tmp_dir=tmp_dir, keep_last=cfg.keep_last)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    cache = RegionCache(train_regions)
     last_save = time.monotonic()
     for epoch in range(s.epoch, cfg.epochs):
         s.epoch = epoch
@@ -865,7 +874,8 @@ def fine_tune(
 
     Without explicit `zoom_weights`, every zoom present in the train chips gets weight 1, so a z18 or z22
     dataset is never filtered out by the base-training defaults. Unless given, the manifest hash covers
-    the chip files, their split and the labels, so a resume on changed data is refused.
+    the chip files, their split and the labels, so a resume on changed data is refused. Labels that fall
+    on no train chip are refused before training (see `train`).
     """
     train_kwargs.setdefault("manifest_hash", fair_data_hash(train_chips, val_chips, labels_path))
     hp = hyperparameters or {}

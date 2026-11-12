@@ -723,6 +723,34 @@ class RegionCache:
         return _is_empty(self.geom(spec.region_id, spec.zoom), self.crop_window(spec))
 
 
+def _on_present_tiles(geom: RegionGeom, boxes: np.ndarray) -> np.ndarray:
+    """Per box, whether it overlaps a present tile of the region with positive area."""
+    present = np.zeros((geom.nrows + 1, geom.ncols + 1), np.int64)
+    for x, y in geom.tiles:
+        present[y - geom.ymin + 1, x - geom.xmin + 1] = 1
+    integral = present.cumsum(0).cumsum(1)
+    clipped = np.clip(boxes, 0, [geom.width, geom.height, geom.width, geom.height])
+    positive = (clipped[:, 2] > clipped[:, 0]) & (clipped[:, 3] > clipped[:, 1])
+    c1, r1 = (np.floor(clipped[:, :2] / geom.tile_px).astype(np.int64)).T
+    c2, r2 = (np.ceil(clipped[:, 2:] / geom.tile_px).astype(np.int64)).T
+    count = integral[r2, c2] - integral[r1, c2] - integral[r2, c1] + integral[r1, c1]
+    return positive & (count > 0)
+
+
+def any_label_on_chips(regions: Sequence[Region], classes: Sequence[str], cache: RegionCache) -> bool:
+    """Whether a label of ``classes`` overlaps a chip of the regions at any zoom, as training sees the
+    labels: tree Points as crowns, masked crowns (``masked_crown_rings``) as no label, tree_groups only in
+    a region that labels them. Ignore polygons, the footprint and the 40 % rule are not applied, so a
+    label they would drop still counts."""
+    for region in regions:
+        for zoom in region.chips:
+            geom = cache.geom(region.id, zoom)
+            by_class = {"tree": geom.boxes, "tree_group": geom.group_boxes}
+            if any(_on_present_tiles(geom, by_class[name]).any() for name in classes):
+                return True
+    return False
+
+
 def total_chips(regions: Sequence[Region]) -> int:
     return sum(len(paths) for r in regions for paths in r.chips.values())
 

@@ -5,7 +5,14 @@ import pickle
 import numpy as np
 import pytest
 
-from fair_trees.dataset import RegionCache, SampleSpec, load_regions, plan_epoch, sampler_stats
+from fair_trees.dataset import (
+    RegionCache,
+    SampleSpec,
+    any_label_on_chips,
+    load_regions,
+    plan_epoch,
+    sampler_stats,
+)
 from fair_trees.params import TrainParams
 
 CFG = TrainParams(samples_per_epoch=200)
@@ -131,3 +138,23 @@ def test_cache_pickles_without_rasters(write_region):
     cache.chip(regions[0].chips[20][0])
     clone = pickle.loads(pickle.dumps(cache))
     assert clone.crop_window(spec) == cache.crop_window(spec)
+
+
+@pytest.mark.parametrize(
+    "boxes_px, groups_px, classes, expected",
+    [
+        ([(10, 10, 30, 30)], [], ("tree",), True),
+        ([(300, 10, 320, 30)], [], ("tree",), False),  # in the frame, on the absent middle tile
+        ([(500, 10, 520, 30)], [], ("tree",), True),  # from the absent tile into the third one
+        ([(300, 10, 320, 30)], [(10, 10, 60, 60)], ("tree",), False),  # a group is no label of a tree model
+        ([(300, 10, 320, 30)], [(10, 10, 60, 60)], ("tree", "tree_group"), True),
+    ],
+)
+def test_any_label_on_chips_counts_labels_on_present_tiles(
+    write_region, boxes_px, groups_px, classes, expected
+):
+    d = write_region(
+        "h", tiles=((0, 0), (2, 0)), boxes_px=boxes_px, groups_px=groups_px, classes=("tree", "tree_group")
+    )
+    regions = load_regions(d.parent)
+    assert any_label_on_chips(regions, classes, RegionCache(regions)) is expected
