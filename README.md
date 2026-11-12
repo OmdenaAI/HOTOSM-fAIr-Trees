@@ -8,14 +8,16 @@ FeatureCollection of box polygons, class 1 tree and class 2 tree_group.
 
 ## Install
 
-The library is installed from GitHub, not PyPI; pin a tag or a commit.
+The library is installed from GitHub, not PyPI. Replace `<ref>` with a release tag or a commit SHA.
 
 ```bash
-pip install "fair-trees @ git+https://github.com/OmdenaAI/HOTOSM-fAIr-Trees@main"         # serving only, no torch
-pip install "fair-trees[train] @ git+https://github.com/OmdenaAI/HOTOSM-fAIr-Trees@main"  # adds training and export
+pip install "fair-trees @ git+https://github.com/OmdenaAI/HOTOSM-fAIr-Trees@<ref>"         # serving only, no torch
+pip install "fair-trees[train] @ git+https://github.com/OmdenaAI/HOTOSM-fAIr-Trees@<ref>"  # adds training and export
 ```
 
-The `train` extra pins `torch==2.11.0` and `torchvision==0.26.0`. In a clone:
+The serving core does not install ONNX Runtime: install `onnxruntime` next to it to build the session that
+`predict_session` takes (the `test` extra includes it). The `train` extra pins `torch==2.11.0` and
+`torchvision==0.26.0`. In a clone:
 
 ```bash
 uv sync                          # serving core only
