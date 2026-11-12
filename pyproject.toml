@@ -5,8 +5,9 @@ build-backend = "hatchling.build"
 [project]
 name = "fair-trees"
 version = "0.1.0.dev0"
-description = "DeepForest RetinaNet tree-crown detection for HOT fAIr: preprocessing, decoding, serving, training, evaluation and ONNX export."
+description = "Tree and tree-group detection (RetinaNet) for HOT fAIr: preprocessing, decoding, serving, training, evaluation and ONNX export."
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.12"
 # Serving core only. Nothing here may pull in torch or scipy.
 dependencies = [
