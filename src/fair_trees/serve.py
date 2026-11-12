@@ -23,6 +23,7 @@ from fair_trees.decode import (
 from fair_trees.georef import mosaic_px_to_4326_rings
 from fair_trees.params import (
     CLASSES,
+    MIN_SIZE,
     OUTPUT_NAMES,
     THRESHOLDS_KEY,
     WINDOWS_KEY,
@@ -47,6 +48,10 @@ from fair_trees.preprocess import (
 logger = logging.getLogger(__name__)
 
 MAX_WINDOW_FACTOR = 16  # a request may cost at most this many times the default window count
+# Training reads z19-z21 chips and downscales some up to 2x, so z19 at the equator downscaled (0.6 m, about
+# z18) is the coarsest ground it saw [V]; past that, windows are upscaled more than in training.
+WARN_GSD_M = 0.62
+MAX_GSD_M = 2.0  # a 5 m crown is under 3 px: too coarse to find crowns (z16 and coarser)
 
 RunFn = Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]]
 
@@ -176,6 +181,27 @@ def _window_count(mosaics: list[Mosaic], params: InferenceParams) -> int:
     )
 
 
+def _check_ground_resolution(mosaics: list[Mosaic], window_m: float) -> None:
+    """Refuse imagery too coarse for crowns; warn when it is coarser than training saw."""
+    too_coarse = [m for m in mosaics if m.gsd_m > MAX_GSD_M]
+    if too_coarse:
+        m = too_coarse[0]
+        raise ValueError(
+            f"z{m.z} imagery at {m.gsd_m:.2f} m/px is too coarse to find tree crowns "
+            f"(the limit is {MAX_GSD_M:g} m/px); use z18 or finer chips"
+        )
+    for m in sorted({m.z: m for m in mosaics if m.gsd_m > WARN_GSD_M}.values(), key=lambda m: m.z):
+        logger.warning(
+            "z%d imagery at %.2f m/px is coarser than training saw (%.2f m/px): %g m windows are upscaled "
+            "%.0fx and small crowns are missed",
+            m.z,
+            m.gsd_m,
+            WARN_GSD_M,
+            window_m,
+            MIN_SIZE / max(1, round(window_m / m.gsd_m)),
+        )
+
+
 def _metadata(session) -> Mapping[str, str]:
     """The ONNX model's custom metadata; empty for a session that exposes none."""
     get = getattr(session, "get_modelmeta", None)
@@ -207,6 +233,7 @@ def predict_session(
     if not mosaics and skipped:
         reasons = "; ".join(f"{name}: {why}" for name, why in skipped[:3])
         raise ValueError(f"no usable chips ({len(skipped)} skipped): {reasons}")
+    _check_ground_resolution(mosaics, p.window_m)
     requested, baseline = _window_count(mosaics, p), _window_count(mosaics, InferenceParams())
     if requested > MAX_WINDOW_FACTOR * baseline:
         raise ValueError(

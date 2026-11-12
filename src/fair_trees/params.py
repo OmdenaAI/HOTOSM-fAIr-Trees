@@ -48,8 +48,9 @@ class InferenceParams:
     edge_band: float = 0.05
     min_valid_fraction: float = 0.2
     group_window_m: float = 120.0  # tree_group window; window_m is the tree window
-    # how group boxes cut by a window edge combine (GROUP_MERGE_RULES); drop_edge beat join by +0.08 group F1
-    # [0.06, 0.10] on HOT val
+    # how group boxes cut by a window edge combine (GROUP_MERGE_RULES). At window_overlap 0.5 drop_edge beat
+    # join by +0.08 group F1 [0.06, 0.10] on HOT val; at 0.25 overlap beat drop_edge by +0.02 [0.01, 0.04],
+    # so a caller lowering window_overlap sets this too (theory.md section 4)
     group_merge: str = "drop_edge"
     # per class (CLASSES order), the model's own thresholds; a class not covered uses confidence_threshold.
     # Set from the model's metadata by predict_session, never parsed from the caller's params.
@@ -82,6 +83,7 @@ class TrainParams:
     batch_size: int = 4
     samples_per_epoch: int | None = None  # None = number of train chips
     schedule: str = "cosine"
+    max_grad_norm: float | None = None  # clip the gradient's total norm to this; None = no clipping
     patience: int = 3
     min_delta: float = 0.005
     amp: bool = True
@@ -331,6 +333,7 @@ _FLOAT_TRAIN_FIELDS = (
     "source_alpha",
     "biome_alpha",
     "empty_crop_cap",
+    "max_grad_norm",
 )
 
 
@@ -372,6 +375,8 @@ def parse_train_params(hp: Mapping | None) -> TrainParams:
         _at_least("region_repeat_cap", p.region_repeat_cap, 1)
     if p.empty_crop_cap is not None:
         _in_range("empty_crop_cap", p.empty_crop_cap, 0, 1)
+    if p.max_grad_norm is not None:
+        _at_least("max_grad_norm", p.max_grad_norm, 0, strict=True)
     if p.num_classes is not None:
         _in_range("num_classes", p.num_classes, 1, len(CLASSES))
     if p.l2sp_alpha > 0:

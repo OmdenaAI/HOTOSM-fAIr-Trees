@@ -3,7 +3,14 @@ import json
 
 import numpy as np
 
-from fair_trees.dataset import RegionCache, SampleSpec, load_regions, load_sample, plan_epoch
+from fair_trees.dataset import (
+    RegionCache,
+    SampleSpec,
+    load_fair_dataset,
+    load_regions,
+    load_sample,
+    plan_epoch,
+)
 from fair_trees.georef import true_gsd
 from fair_trees.params import CLASSES, AugmentParams, TrainParams
 from fair_trees.preprocess import mosaic_chips
@@ -24,6 +31,23 @@ def test_forty_percent_rule_and_ignore(write_region):
     assert s.rgb.shape == (200, 200, 3) and s.rgb.dtype == np.uint8
     np.testing.assert_allclose(s.boxes, [[0, 22, 32, 72], [72, 72, 112, 102]], atol=1e-3)
     assert (s.rgb[112:182, 112:182] == 0).all()  # the ignore polygon is blacked out
+
+
+def test_masked_tree_points_are_blacked_out(write_oam_chip, tmp_path, geo):
+    sized = {"natural": "tree", "diameter_crown": "6"}
+    features = [
+        geo.point_feature((60, 60), tags=sized, label=1),
+        geo.point_feature((190, 60), tags=sized, label=1),
+        geo.point_feature((128, 170), tags={"natural": "tree"}, label=1),  # no size: masked, as most have one
+    ]
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    [region] = load_fair_dataset([write_oam_chip(2**19, 2**19)], labels)
+    spec = SampleSpec(region.id, 20, (128.0, 128.0), 256 * true_gsd(20, 0.0), 0)  # the whole chip
+    s = load_sample(spec, RegionCache([region]), NO_AUG)
+    assert len(s.boxes) == 2
+    assert (s.rgb[158:182, 116:140] == 0).all()  # a 4 m (26.8 px) square on the tree without a size
+    assert (s.rgb[:150] > 0).all() and (s.rgb[190:] > 0).all()
 
 
 def test_tree_only_region_sample_is_unchanged(write_region):

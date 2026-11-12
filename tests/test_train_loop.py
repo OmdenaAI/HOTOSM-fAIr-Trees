@@ -34,6 +34,17 @@ def weights(tmp_path_factory):
     return path
 
 
+@pytest.fixture(scope="module")
+def weights_k2(tmp_path_factory):
+    """Two-class start weights with the thresholds and windows a fine-tune writes beside its best.pt."""
+    d = tmp_path_factory.mktemp("weights_k2")
+    torch.manual_seed(0)
+    torch.save(T.build_model(None, trainable_layers=0, num_classes=2).state_dict(), d / "best.pt")
+    (d / "thresholds.json").write_text(json.dumps({"tree": 0.2, "tree_group": 0.15}))
+    (d / "windows.json").write_text(json.dumps({"window_m": 60.0, "group_window_m": 100.0}))
+    return d / "best.pt"
+
+
 @pytest.fixture
 def regions(write_region):
     d = write_region("t", tiles=((0, 0), (1, 0)), boxes_px=[(30, 30, 60, 70)])
@@ -122,6 +133,29 @@ def test_early_stopping_best_and_logs(monkeypatch, regions, weights, tmp_path):
     with (tmp_path / "run" / "metrics.csv").open() as f:
         rows = list(csv.DictReader(f))
     assert len(rows) == 4 and rows[2]["improved"] == "True"
+
+
+class SteepScript(Script):
+    """A loss whose gradient on the class logits' weight is 1000 everywhere."""
+
+    def forward_loss(self, model, images, image_sizes, targets):
+        w = model.head.classification_head.cls_logits.weight
+        return {"classification": (w * 1000).sum(), "bbox_regression": (w * 0).sum()}
+
+
+def _weight_change(weights, best):
+    start, end = torch.load(weights, weights_only=True), torch.load(best, weights_only=True)
+    return max((end[k].float() - start[k].float()).norm().item() for k in start)
+
+
+def test_max_grad_norm_clips_the_step(monkeypatch, regions, weights, tmp_path):
+    cfg = dataclasses.replace(CFG, epochs=1, weight_decay=0.0, learning_rate=1e-3)
+    free = _run(monkeypatch, SteepScript([0.5]), regions, weights, tmp_path / "free", cfg=cfg)
+    clipped_cfg = dataclasses.replace(cfg, max_grad_norm=1e-3)
+    clipped = _run(monkeypatch, SteepScript([0.5]), regions, weights, tmp_path / "clip", cfg=clipped_cfg)
+    # 3 SGD steps with momentum 0.9 move a weight at most lr * max_grad_norm * (1 + 1.9 + 2.71)
+    assert _weight_change(weights, clipped.best_checkpoint) < 1e-3 * 1e-3 * 5.61 * 1.01
+    assert _weight_change(weights, free.best_checkpoint) > 1.0
 
 
 @pytest.mark.parametrize("ckpt_every_min", [1e-9, 1e3])  # mid-epoch checkpoints vs epoch-end only
@@ -253,12 +287,223 @@ def test_fine_tune_crops_up_to_80_m_for_one_or_two_classes(
     assert seen == [(30.0, 80.0), (30.0, 80.0), (30.0, 80.0), (30.0, 60.0)]
 
 
-def test_two_classes_without_group_labels_are_refused(monkeypatch, regions, weights, tmp_path):
+def test_new_group_class_without_group_labels_is_refused(monkeypatch, regions, weights, tmp_path):
     script = Script([0.1])
-    cfg = dataclasses.replace(CFG, num_classes=2)
+    cfg = dataclasses.replace(CFG, num_classes=2)  # tree-only start weights: the group rows would be new
     with pytest.raises(ValueError, match="tree_group"):
         _run(monkeypatch, script, regions, weights, tmp_path / "run", cfg=cfg)
     assert script.calls == 0 and not (tmp_path / "run").exists()
+
+
+def _with(script, seen=None, **extra):
+    """`script.validate` that also records how many units each class got and adds `extra` metrics."""
+    validate = script.validate
+
+    def wrapped(model, device, units, params, epoch):
+        if seen is not None:
+            seen.append({name: len(us) for name, us in units.items()})
+        return validate(model, device, units, params, epoch) | extra
+
+    script.validate = wrapped
+    return script
+
+
+ONE_EPOCH = dataclasses.replace(CFG, epochs=1)
+
+
+def test_trained_group_class_is_kept_on_tree_only_data(monkeypatch, regions, weights_k2, tmp_path, caplog):
+    seen = []
+    script = _with(Script([0.5]), seen)
+    with caplog.at_level(logging.WARNING, logger="fair_trees.train"):
+        res = _run(monkeypatch, script, regions, weights_k2, tmp_path / "run", cfg=ONE_EPOCH)
+    assert T.checkpoint_num_classes(torch.load(res.best_checkpoint, weights_only=True)) == 2
+    assert "tree_group" in caplog.text  # the log says the group class is kept, not trained
+    assert seen == [{"tree": 1, "tree_group": 0}]  # val scores trees only
+
+
+def test_unlabelled_class_keeps_the_start_weights_threshold_and_window(
+    monkeypatch, regions, weights_k2, tmp_path
+):
+    out = tmp_path / "run"
+    script = _with(Script([0.5]), threshold_tree=0.25)
+    res = _run(monkeypatch, script, regions, weights_k2, out, cfg=ONE_EPOCH)
+    expected = {"tree": pytest.approx(0.25), "tree_group": pytest.approx(0.15)}
+    assert res.thresholds == expected
+    assert json.loads((out / "thresholds.json").read_text()) == expected
+    # trees were picked at the val window (40 m); the group threshold holds at the start weights' window
+    assert json.loads((out / "windows.json").read_text()) == {"window_m": 40.0, "group_window_m": 100.0}
+    again = _run(monkeypatch, Script([0.9]), regions, weights_k2, out, cfg=ONE_EPOCH)  # the finished run
+    assert again.thresholds == expected
+
+
+def test_tree_only_val_of_a_two_class_model_uses_the_two_class_prior(
+    monkeypatch, regions, weights_k2, tmp_path
+):
+    _stub_reports(monkeypatch, {"src": (0.4, 0.3)})  # too few val boxes to pick from: the prior
+    monkeypatch.setattr(T, "forward_loss", Script([]).forward_loss)
+    res = T.train(
+        ONE_EPOCH,
+        *regions,
+        weights=weights_k2,
+        out_dir=tmp_path / "run",
+        num_workers=0,
+        tmp_dir=tmp_path / "t",
+    )
+    assert res.thresholds == {"tree": 0.2, "tree_group": 0.15}
+
+
+def _group_only_dataset(write_oam_chip, geo, tmp_path):
+    """Three z22 chips and the labels of a dataset whose one class is tree_group, as fAIr stamps them."""
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(3)]
+    labels = tmp_path / "labels.geojson"
+    group = geo.feature_collection([geo.box_polygon((5, 5, 60, 60))], tags={"natural": "tree_group"}, label=1)
+    labels.write_text(json.dumps(group))
+    return chips, labels
+
+
+def test_group_only_dataset_trains_groups_and_keeps_trees(
+    monkeypatch, write_oam_chip, geo, weights_k2, tmp_path
+):
+    chips, labels = _group_only_dataset(write_oam_chip, geo, tmp_path)
+    seen = []
+    script = _with(Script([0.5]), seen, threshold_tree_group=0.25)
+    monkeypatch.setattr(T, "forward_loss", script.forward_loss)
+    monkeypatch.setattr(T, "_validate", script.validate)
+    res = T.fine_tune(
+        chips[:2],
+        chips[2:],
+        labels,
+        {"epochs": 1, "batch_size": 2, "amp": False},
+        weights=weights_k2,
+        out_dir=tmp_path / "ft",
+        num_workers=0,
+        tmp_dir=tmp_path / "tmp",
+    )
+    assert seen == [{"tree": 0, "tree_group": 1}]
+    assert res.thresholds == {"tree": pytest.approx(0.2), "tree_group": pytest.approx(0.25)}
+    windows = {"window_m": 60.0, "group_window_m": 120.0}  # the start weights' tree window, val's for groups
+    assert json.loads((tmp_path / "ft" / "windows.json").read_text()) == windows
+
+
+def test_data_that_labels_no_class_of_the_model_is_refused(
+    monkeypatch, write_oam_chip, geo, weights, tmp_path
+):
+    chips, labels = _group_only_dataset(write_oam_chip, geo, tmp_path)
+    script = Script([0.5])
+    monkeypatch.setattr(T, "forward_loss", script.forward_loss)
+    with pytest.raises(ValueError, match="labels"):  # tree-only weights, tree_group-only labels
+        T.fine_tune(chips[:2], chips[2:], labels, {"epochs": 1}, weights=weights, out_dir=tmp_path / "ft")
+    assert script.calls == 0 and not (tmp_path / "ft").exists()
+
+
+def _box(geo, box_px, **properties):
+    return geo.feature_collection([geo.box_polygon(box_px)], **properties)["features"][0]
+
+
+def _sized_tree(geo, xy_px):
+    return geo.point_feature(xy_px, tags={"natural": "tree", "diameter_crown": "6"})
+
+
+FAR_PX = (2000, 2000, 2010, 2010)  # z20 pixels: tiles south-east of every chip below
+
+
+def _ring_feature(ring, **properties):
+    return {
+        "type": "Feature",
+        "geometry": {"type": "Polygon", "coordinates": [ring]},
+        "properties": properties,
+    }
+
+
+def _square(x, y, side):
+    return [[x, y], [x + side, y], [x + side, y + side], [x, y + side], [x, y]]
+
+
+# pyproj maps coordinates outside longitude and latitude range to inf
+IN_METRES = _ring_feature(_square(500_000.0, 930_000.0, 10.0))  # a UTM polygon written as if lon/lat
+POINT_IN_METRES = {
+    "type": "Feature",
+    "geometry": {"type": "Point", "coordinates": [500_000.0, 930_000.0]},
+    "properties": {"natural": "tree"},
+}
+LATITUDE_95 = _ring_feature(_square(10.0, 95.0, 0.1))
+# affine warns as it turns those inf coordinates into NaN pixel boxes
+OUT_OF_RANGE_WARNING = pytest.mark.filterwarnings(
+    "ignore:invalid value encountered in multiply:RuntimeWarning"
+)
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        pytest.param(lambda geo: [_box(geo, FAR_PX)], id="outside-every-chip"),
+        pytest.param(lambda geo: [_box(geo, (200, 20, 210, 30))], id="on-the-val-chip-only"),
+        pytest.param(
+            # three of four trees have a size, so the unsized one on the train chips is masked, not labelled
+            lambda geo: (
+                [_sized_tree(geo, (2000 + 20 * i, 2000)) for i in range(3)]
+                + [geo.point_feature((20, 20), tags={"natural": "tree"})]
+            ),
+            id="only-a-masked-point-on-the-chips",
+        ),
+        pytest.param(
+            # a tree-only model trains no tree_group: the group on the chips is no label for it
+            lambda geo: [_box(geo, FAR_PX), _box(geo, (5, 5, 60, 60), label=2)],
+            id="only-a-group-on-the-chips-of-a-tree-only-model",
+        ),
+        pytest.param(lambda geo: [IN_METRES], id="a-polygon-in-projected-metres", marks=OUT_OF_RANGE_WARNING),
+        pytest.param(
+            lambda geo: [POINT_IN_METRES], id="a-point-in-projected-metres", marks=OUT_OF_RANGE_WARNING
+        ),
+    ],
+)
+def test_labels_on_no_train_chip_are_refused(monkeypatch, write_oam_chip, geo, weights, tmp_path, features):
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in range(4)]  # z20 pixels x 0..256, y 0..64
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps({"type": "FeatureCollection", "features": features(geo)}))
+    script = Script([0.5])
+    monkeypatch.setattr(T, "forward_loss", script.forward_loss)
+    monkeypatch.setattr(T, "_validate", script.validate)
+    with pytest.raises(
+        ValueError, match="no label of the model's classes .* falls on any train chip.*Check that the labels"
+    ):
+        T.fine_tune(chips[:3], chips[3:], labels, {"epochs": 1}, weights=weights, out_dir=tmp_path / "ft")
+    assert script.calls == 0 and not (tmp_path / "ft").exists()
+
+
+@pytest.mark.parametrize(
+    "features",
+    [
+        pytest.param(lambda geo: [_box(geo, (330, 10, 340, 20))], id="a-polygon"),
+        pytest.param(lambda geo: [geo.point_feature((335, 15), tags={"natural": "tree"})], id="a-tree-point"),
+        pytest.param(
+            lambda geo: [_box(geo, (330, 10, 340, 20)), LATITUDE_95],
+            id="and-one-out-of-range",
+            marks=OUT_OF_RANGE_WARNING,
+        ),
+    ],
+)
+def test_one_labelled_train_chip_among_empty_ones_trains(
+    monkeypatch, write_oam_chip, geo, weights, tmp_path, features
+):
+    # two separate train mosaics (two regions) and a val chip; only the second mosaic has a label
+    chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in (0, 1, 5, 6, 10)]
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps({"type": "FeatureCollection", "features": features(geo)}))
+    script = Script([0.5])
+    monkeypatch.setattr(T, "forward_loss", script.forward_loss)
+    monkeypatch.setattr(T, "_validate", script.validate)
+    res = T.fine_tune(
+        chips[:4],
+        chips[4:],
+        labels,
+        {"epochs": 1, "batch_size": 2, "amp": False},
+        weights=weights,
+        out_dir=tmp_path / "ft",
+        num_workers=0,
+        tmp_dir=tmp_path / "tmp",
+    )
+    assert len(res.history) == 1 and script.calls == 2
 
 
 def test_fine_tune_refuses_to_resume_on_changed_data(monkeypatch, write_oam_chip, geo, weights, tmp_path):

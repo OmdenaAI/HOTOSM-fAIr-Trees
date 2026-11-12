@@ -134,6 +134,11 @@ def box_polygon(box_px):
     return {"type": "Polygon", "coordinates": [ring]}
 
 
+def point_feature(xy_px, **properties):
+    geometry = {"type": "Point", "coordinates": px_to_4326([xy_px])[0]}
+    return {"type": "Feature", "geometry": geometry, "properties": properties}
+
+
 def feature_collection(geometries, **properties):
     features = [{"type": "Feature", "geometry": g, "properties": dict(properties)} for g in geometries]
     return {"type": "FeatureCollection", "features": features}
@@ -142,7 +147,11 @@ def feature_collection(geometries, **properties):
 @pytest.fixture
 def geo():
     return SimpleNamespace(
-        res20=RES20, px_to_4326=px_to_4326, box_polygon=box_polygon, feature_collection=feature_collection
+        res20=RES20,
+        px_to_4326=px_to_4326,
+        box_polygon=box_polygon,
+        point_feature=point_feature,
+        feature_collection=feature_collection,
     )
 
 

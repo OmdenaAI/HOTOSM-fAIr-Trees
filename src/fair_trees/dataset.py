@@ -8,8 +8,9 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from collections import Counter, OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import NamedTuple
@@ -31,7 +32,14 @@ MIN_BOX_FRACTION = 0.4
 MAX_MASKED = 0.8  # a crop with more masked area than this is redrawn
 CROP_RETRIES = 20
 LOWRES_CELLS = 16  # low-resolution mask cells per tile side
+# mapper diameter_crown typos reach 25,231 m; a crown over this is read as an unknown diameter
+MAX_DIAMETER_M = 30.0
+DEFAULT_CROWN_M = 4.0  # square of a tree Point without a usable diameter: the median of HOT's diameter_crown
+# a file's tree Points without a usable diameter are masked when at least this share has one, else labelled
+MASK_UNSIZED_FROM = 0.5
+_DIAMETER = re.compile(r"\s*(\d+(?:[.,]\d+)?)\s*(?:m|M|metres|meters)?\s*")
 _TO_3857 = Transformer.from_crs(4326, 3857, always_xy=True)
+_TO_4326 = Transformer.from_crs(3857, 4326, always_xy=True)
 _REQUIRED_KEYS = ("id", "source", "biome", "licence", "split", "footprint", "valid_area_m2")
 
 
@@ -60,8 +68,27 @@ def load_geojson(path: Path) -> dict:
     return json.loads(Path(path).read_text())
 
 
+def _osm_tags(properties: dict) -> dict:
+    """A feature's OSM tags: its ``tags`` (an object, or a JSON string), else the properties themselves."""
+    tags = properties.get("tags", properties)
+    if isinstance(tags, str):
+        try:
+            tags = json.loads(tags)
+        except ValueError:
+            return {}
+    return tags if isinstance(tags, dict) else {}
+
+
 def _label_of(properties: dict) -> int | None:
-    """A missing label is a tree (1); a present one must be the number 1 or 2 (tree_group), else None."""
+    """The class number of a label feature (1 tree, 2 tree_group).
+
+    Its OSM ``natural`` tag decides when that names a class: fAIr numbers ``label`` by the order a dataset
+    lists its classes, so a tree_group-only dataset arrives as ``label: 1``. Otherwise the ``label`` number
+    does: missing is a tree, and anything but 1 or 2 is None.
+    """
+    natural = _osm_tags(properties).get("natural")
+    if isinstance(natural, str) and natural in CLASSES:
+        return CLASSES.index(natural) + 1
     if "label" not in properties:
         return 1
     try:
@@ -95,23 +122,115 @@ def _exterior_ring(part: list) -> tuple[np.ndarray, str | None]:
     return ring, _invalid_reason(ring)
 
 
+def parse_diameter(value) -> float:
+    """Metres from a ``diameter_crown`` value such as '3m', '2.412m', '3,134 m', '4' or 4; NaN if missing or
+    unclear."""
+    if isinstance(value, int | float) and not isinstance(value, bool):
+        return float(value)
+    if not isinstance(value, str):
+        return math.nan
+    m = _DIAMETER.fullmatch(value)
+    return float(m.group(1).replace(",", ".")) if m else math.nan
+
+
+def crown_diameter_m(properties: dict) -> float | None:
+    """A tree's ``diameter_crown`` in metres from its OSM tags (``_osm_tags``); None when missing, unclear
+    or outside (0, MAX_DIAMETER_M]."""
+    diameter = parse_diameter(_osm_tags(properties).get("diameter_crown"))
+    return diameter if 0 < diameter <= MAX_DIAMETER_M else None
+
+
+def _point_crown_ring(position: list, diameter_m: float) -> tuple[np.ndarray, str | None]:
+    """The lon/lat ring of a square crown ``diameter_m`` on the ground, centred on a Point's position."""
+    try:
+        lon, lat = (float(v) for v in position[:2])
+    except (TypeError, ValueError):
+        return np.empty((0, 2)), "malformed position"
+    if not (math.isfinite(lon) and math.isfinite(lat)):
+        return np.empty((0, 2)), "non-finite coordinate"
+    x, y = _TO_3857.transform(lon, lat)
+    half = diameter_m / 2 / math.cos(math.radians(lat))  # ground metres are 1 / cos(lat) longer in 3857
+    xs = [x - half, x + half, x + half, x - half, x - half]
+    ys = [y - half, y - half, y + half, y + half, y - half]
+    return np.column_stack(_TO_4326.transform(xs, ys)), None
+
+
+def _tree_points(geojson: dict) -> Iterator[tuple[dict, float | None]]:
+    """The geometry and usable crown diameter (None without one) of each tree Point of a labels file."""
+    for feature in geojson.get("features", []):
+        geometry = feature.get("geometry") or {}
+        properties = feature.get("properties") or {}
+        if geometry.get("type") == "Point" and _label_of(properties) == 1:
+            yield geometry, crown_diameter_m(properties)
+
+
+def tree_point_counts(geojson: dict) -> tuple[int, int]:
+    """How many of a labels file's tree Points have a usable ``diameter_crown``, and how many do not."""
+    diameters = [diameter for _, diameter in _tree_points(geojson)]
+    unsized = sum(diameter is None for diameter in diameters)
+    return len(diameters) - unsized, unsized
+
+
+def masks_unsized_points(geojson: dict) -> bool:
+    """Whether a labels file's tree Points without a usable ``diameter_crown`` are masked, not labelled.
+
+    Masked when at least ``MASK_UNSIZED_FROM`` of the tree Points have a diameter: those are enough to
+    learn from, so no size is guessed. Labelled as ``DEFAULT_CROWN_M`` crowns when fewer do, as OSM trees
+    mostly come without one and masking them would leave almost nothing to learn.
+    """
+    sized, unsized = tree_point_counts(geojson)
+    return sized >= MASK_UNSIZED_FROM * (sized + unsized)
+
+
+def masked_crown_rings(geojson: dict) -> list[np.ndarray]:
+    """A ``DEFAULT_CROWN_M`` square on each tree Point without a usable ``diameter_crown`` when the file
+    masks those (``masks_unsized_points``), else nothing. A masked crown acts as an ignore polygon: its
+    pixels are blacked out in training and predictions on it are not scored."""
+    if not masks_unsized_points(geojson):
+        return []
+    squares = (
+        _point_crown_ring(geometry.get("coordinates") or [], DEFAULT_CROWN_M)
+        for geometry, diameter in _tree_points(geojson)
+        if diameter is None
+    )
+    return [ring for ring, why in squares if not why]
+
+
 def label_rings(geojson: dict, label: int = 1) -> list[np.ndarray]:
     """Exterior rings of the labels of class ``label`` (1 tree, 2 tree_group) as (k, 2) float64 lon/lat
     arrays, one per polygon part for trees. A tree_group is one group however many parts it has (canopy
     minus the crowns inside can fall apart), so its parts' rings are stacked into one array per feature.
+    A tree Point (OSM maps trees as points) is a square crown of its ``diameter_crown`` metres; one
+    without a usable diameter is a ``DEFAULT_CROWN_M`` square, unless the file masks those
+    (``masks_unsized_points``): then it is no label but a masked crown (``masked_crown_rings``).
 
     Features of another class are dropped silently; empty, unsupported and invalid geometries are skipped
     with a warning.
     """
     rings = []
+    mask_unsized = label == 1 and masks_unsized_points(geojson)
     for i, feature in enumerate(geojson.get("features", [])):
-        if _label_of(feature.get("properties") or {}) != label:
+        properties = feature.get("properties") or {}
+        if _label_of(properties) != label:
             continue
         geometry = feature.get("geometry")
         if not geometry or not geometry.get("coordinates"):
             logger.warning(f"label feature {i}: empty geometry, skipped")
             continue
         kind = geometry.get("type")
+        if kind == "Point":
+            if label != 1:
+                logger.warning(f"label feature {i}: a {CLASSES[label - 1]} Point has no extent, skipped")
+                continue
+            diameter = crown_diameter_m(properties)
+            if diameter is None and mask_unsized:
+                continue
+            ring, why = _point_crown_ring(geometry["coordinates"], diameter or DEFAULT_CROWN_M)
+            if why:
+                logger.warning(f"label feature {i}: invalid geometry ({why}), skipped")
+                continue
+            rings.append(ring)
+            continue
         if kind == "Polygon":
             parts = [geometry["coordinates"]]
         elif kind == "MultiPolygon":
@@ -132,15 +251,25 @@ def label_rings(geojson: dict, label: int = 1) -> list[np.ndarray]:
     return rings
 
 
-def labels_to_boxes(geojson: dict, transform_3857: Affine, label: int = 1) -> np.ndarray:
-    """Tight XYXY box per ring of class ``label`` in the pixel frame of ``transform_3857``, float32 (N, 4)."""
+def _rings_to_boxes(rings: Sequence[np.ndarray], transform_3857: Affine) -> np.ndarray:
     inverse = ~transform_3857
     boxes = []
-    for ring in label_rings(geojson, label):
+    for ring in rings:
         x, y = _TO_3857.transform(ring[:, 0], ring[:, 1])
         cols, rows = inverse @ (np.asarray(x), np.asarray(y))
         boxes.append([cols.min(), rows.min(), cols.max(), rows.max()])
     return np.asarray(boxes, np.float32).reshape(-1, 4)
+
+
+def labels_to_boxes(geojson: dict, transform_3857: Affine, label: int = 1) -> np.ndarray:
+    """Tight XYXY box per ring of class ``label`` in the pixel frame of ``transform_3857``, float32 (N, 4)."""
+    return _rings_to_boxes(label_rings(geojson, label), transform_3857)
+
+
+def masked_crown_boxes(geojson: dict, transform_3857: Affine) -> np.ndarray:
+    """XYXY box per masked crown (``masked_crown_rings``) in the pixel frame of ``transform_3857``, float32
+    (N, 4)."""
+    return _rings_to_boxes(masked_crown_rings(geojson), transform_3857)
 
 
 def _project_geometry(geometry: dict) -> dict:
@@ -283,10 +412,20 @@ def load_regions(root: Path) -> list[Region]:
 def load_fair_dataset(chips: Sequence[Path], labels_path: Path, *, split: str = "train") -> list[Region]:
     """Regions for a mapper's own chips: one per zoom and 8-connected tile component.
 
-    The regions label tree_group too when the labels file holds any tree_group (``label: 2``) feature.
+    The regions label the classes the labels file holds a feature of (tree when it holds none). A fAIr
+    dataset has one geometry type, so tree points come without tree_groups and tree_group polygons
+    without trees: a class that was not mapped is unlabelled, not absent.
     """
-    has_groups = bool(label_rings(load_geojson(labels_path), 2))
-    classes = CLASSES if has_groups else ("tree",)
+    labels = load_geojson(labels_path)
+    classes = tuple(name for k, name in enumerate(CLASSES) if label_rings(labels, k + 1)) or ("tree",)
+    sized, unsized = tree_point_counts(labels)
+    if unsized:
+        how = (
+            f"masked as {DEFAULT_CROWN_M:g} m squares, as most trees have a size"
+            if masks_unsized_points(labels)
+            else f"labelled as {DEFAULT_CROWN_M:g} m crowns, as too few trees have a size to learn from"
+        )
+        logger.warning(f"{unsized} of {sized + unsized} tree points have no usable diameter_crown: {how}")
     named, xyzs = [], []
     for path in map(Path, chips):
         xyz = parse_oam_name(path)
@@ -428,8 +567,8 @@ class RegionGeom:
 
     The pixel frame starts at the north-west corner of tile ``(xmin, ymin)``; absent tiles are holes.
     ``boxes`` are the tree labels, ``group_boxes`` the tree_group labels (empty unless the region labels
-    groups). ``lowres_masked`` has one cell per ``cell_px`` x ``cell_px`` pixels, True = absent tile or
-    masked.
+    groups) and ``masked_boxes`` the masked crowns (``masked_crown_boxes``). ``lowres_masked`` has one cell
+    per ``cell_px`` x ``cell_px`` pixels, True = absent tile or masked.
     """
 
     tiles: Mapping[tuple[int, int], Path]
@@ -442,6 +581,7 @@ class RegionGeom:
     gsd_m: float
     boxes: np.ndarray
     group_boxes: np.ndarray
+    masked_boxes: np.ndarray
     lowres_masked: np.ndarray
     cell_px: int
 
@@ -471,6 +611,7 @@ def _build_geom(region: Region, zoom: int) -> RegionGeom:
     gsd_m = true_gsd(zoom, mercator_y_to_lat(maxy - nrows * tile_px * res / 2))
     labels = load_geojson(region.labels_path)
     boxes = labels_to_boxes(labels, transform_3857)
+    masked_boxes = masked_crown_boxes(labels, transform_3857)
     group_boxes = np.zeros((0, 4), np.float32)
     if "tree_group" in region.classes:
         group_boxes = labels_to_boxes(labels, transform_3857, label=2)
@@ -479,6 +620,7 @@ def _build_geom(region: Region, zoom: int) -> RegionGeom:
     cell_px = tile_px // cells
     shape = (nrows * cells, ncols * cells)
     lowres = rasterize_mask(region, transform_3857 @ Affine.scale(cell_px), shape)
+    lowres |= burn_boxes(masked_boxes / cell_px, shape)
     for r in range(nrows):
         for c in range(ncols):
             if (xmin + c, ymin + r) not in tiles:
@@ -494,6 +636,7 @@ def _build_geom(region: Region, zoom: int) -> RegionGeom:
         gsd_m=gsd_m,
         boxes=boxes,
         group_boxes=group_boxes,
+        masked_boxes=masked_boxes,
         lowres_masked=lowres,
         cell_px=cell_px,
     )
@@ -578,6 +721,37 @@ class RegionCache:
     def is_empty(self, spec: SampleSpec) -> bool:
         """True when no label box centre lies inside the crop."""
         return _is_empty(self.geom(spec.region_id, spec.zoom), self.crop_window(spec))
+
+
+def _on_present_tiles(geom: RegionGeom, boxes: np.ndarray) -> np.ndarray:
+    """Per box, whether it overlaps a present tile of the region with positive area; a non-finite box
+    (pyproj maps coordinates outside lon/lat range to inf) does not."""
+    present = np.zeros((geom.nrows + 1, geom.ncols + 1), np.int64)
+    for x, y in geom.tiles:
+        present[y - geom.ymin + 1, x - geom.xmin + 1] = 1
+    integral = present.cumsum(0).cumsum(1)
+    # zeroed before the integer cast, where NaN would become an out-of-bounds index; zero area never counts
+    finite = np.where(np.isfinite(boxes).all(axis=1, keepdims=True), boxes, 0)
+    clipped = np.clip(finite, 0, [geom.width, geom.height, geom.width, geom.height])
+    positive = (clipped[:, 2] > clipped[:, 0]) & (clipped[:, 3] > clipped[:, 1])
+    c1, r1 = (np.floor(clipped[:, :2] / geom.tile_px).astype(np.int64)).T
+    c2, r2 = (np.ceil(clipped[:, 2:] / geom.tile_px).astype(np.int64)).T
+    count = integral[r2, c2] - integral[r1, c2] - integral[r2, c1] + integral[r1, c1]
+    return positive & (count > 0)
+
+
+def any_label_on_chips(regions: Sequence[Region], classes: Sequence[str], cache: RegionCache) -> bool:
+    """Whether a label of ``classes`` overlaps a chip of the regions at any zoom, as training sees the
+    labels: tree Points as crowns, masked crowns (``masked_crown_rings``) as no label, tree_groups only in
+    a region that labels them. Ignore polygons, the footprint and the 40 % rule are not applied, so a
+    label they would drop still counts."""
+    for region in regions:
+        for zoom in region.chips:
+            geom = cache.geom(region.id, zoom)
+            by_class = {"tree": geom.boxes, "tree_group": geom.group_boxes}
+            if any(_on_present_tiles(geom, by_class[name]).any() for name in classes):
+                return True
+    return False
 
 
 def total_chips(regions: Sequence[Region]) -> int:
@@ -717,6 +891,13 @@ def _unsupervised(region: Region, crop_t: Affine, n: int, dropped_groups: np.nda
     return out
 
 
+def _reaching(boxes: np.ndarray, w: Window) -> np.ndarray:
+    """The boxes that reach into the window, in window coordinates."""
+    x1, y1, x2, y2 = boxes.T
+    reach = (x2 > w.x) & (x1 < w.x + w.width) & (y2 > w.y) & (y1 < w.y + w.height)
+    return boxes[reach] - np.array([w.x, w.y, w.x, w.y], boxes.dtype)
+
+
 def burn_boxes(boxes: np.ndarray, shape: tuple[int, int]) -> np.ndarray:
     """(H, W) bool, True on the pixels whose centre lies inside any of the boxes (as ``boxes_in_window``)."""
     out = np.zeros(shape, bool)
@@ -753,7 +934,9 @@ def load_sample(spec: SampleSpec, cache: RegionCache, cfg: TrainParams) -> Sampl
 
     region = cache.region(spec.region_id)
     crop_t = geom.transform_3857 @ Affine.translation(w.x, w.y)
-    masked = ~valid | rasterize_mask(region, crop_t, (n, n))
+    masked = (
+        ~valid | rasterize_mask(region, crop_t, (n, n)) | burn_boxes(_reaching(geom.masked_boxes, w), (n, n))
+    )
     trees = boxes_in_window(geom.boxes, ~masked, w.x, w.y, n, n)
     groups, kept = window_boxes(geom.group_boxes, ~masked, w.x, w.y, n, n, MIN_BOX_FRACTION)
     unsupervised = _unsupervised(region, crop_t, n, groups[~kept])

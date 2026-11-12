@@ -1,9 +1,11 @@
+import json
+
 import numpy as np
 import pytest
 
 pytest.importorskip("scipy")
 
-from fair_trees.dataset import load_regions  # noqa: E402
+from fair_trees.dataset import load_fair_dataset, load_regions  # noqa: E402
 from fair_trees.evaluate import evaluate_regions, region_units  # noqa: E402
 from fair_trees.params import CLASSES, InferenceParams  # noqa: E402
 from fair_trees.serve import ort_run_fn  # noqa: E402
@@ -74,3 +76,18 @@ def test_ignore_polygons_drop_predictions(write_region, fake_session):
     run = ort_run_fn(fake_session({CENTRE_ANCHOR_800: 5.0}))
     assert evaluate_regions(run, load_regions(d.parent), PARAMS).units[0]["fp"] == 0
     assert evaluate_regions(run, load_regions(d.parent), PARAMS, ignore=False).units[0]["fp"] == 1
+
+
+def test_masked_tree_points_drop_predictions(write_oam_chip, tmp_path, geo, fake_session):
+    sized = {"natural": "tree", "diameter_crown": "6"}
+    features = [
+        geo.point_feature((50, 50), tags=sized, label=1),
+        geo.point_feature((200, 50), tags=sized, label=1),
+        geo.point_feature((128, 128), tags={"natural": "tree"}, label=1),  # no size: masked, as most have one
+    ]
+    labels = tmp_path / "labels.geojson"
+    labels.write_text(json.dumps({"type": "FeatureCollection", "features": features}))
+    regions = load_fair_dataset([write_oam_chip(2**19, 2**19)], labels, split="val")
+    run = ort_run_fn(fake_session({CENTRE_ANCHOR_800: 5.0}))  # one detection, on the tree without a size
+    [unit] = evaluate_regions(run, regions, PARAMS).units
+    assert (unit["tp"], unit["fp"], unit["fn"]) == (0, 0, 2)

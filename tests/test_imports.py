@@ -22,4 +22,4 @@ def test_serving_imports_stay_light(mod):
 def test_version():
     import fair_trees
 
-    assert fair_trees.__version__ == "0.1.0.dev0"
+    assert fair_trees.__version__ == "0.1.0"

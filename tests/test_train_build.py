@@ -106,7 +106,9 @@ def test_expand_k1_to_k2_keeps_tree_rows(model3, tmp_path):
     batch = np.random.default_rng(0).normal(size=(1, 3, 128, 160)).astype(np.float32)
     cls1, _ = torch_run_fn(model3, torch.device("cpu"))(batch)
     cls2, _ = torch_run_fn(a, torch.device("cpu"))(batch)
-    np.testing.assert_allclose(cls2[..., 0], cls1[..., 0], atol=1e-5)
+    # The tree rows are bit-equal (asserted above), but a 2-class conv sums in another order than a
+    # 1-class one on some CPUs: logits near -5 differed by 1.5e-5 on a CI runner.
+    np.testing.assert_allclose(cls2[..., 0], cls1[..., 0], atol=1e-4)
 
 
 def test_expansion_keeps_state_metadata(model3):

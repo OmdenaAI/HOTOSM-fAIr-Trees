@@ -221,3 +221,22 @@ column says CC-BY on every `restor/tcd` row.
 - The notebook's contact sheet draws canopy as each feature's bounding rectangle, which usually falls outside a
   chip, so it shows no canopy; shading the masked pixels of the `restor/tcd-nc` test tiles locally showed the canopy
   masked and the trees inside it left unmasked.
+
+## Published model weights
+
+| Item | URL | Revision | Licence |
+| --- | --- | --- | --- |
+| `hot-groups-crop80` (final Trees model: 2 classes, tree and tree_group) | https://huggingface.co/OmarHelmy/retinanet-tree-groups | tag `v0.1.0` = commit `efd0badad62846bb063c558003f33e780da602be` (2026-11-10) | CC-BY-NC-4.0 |
+
+- The non-commercial term comes from the joint base: 212 of its 3,338 OAM-TCD train tiles are `restor/tcd-nc`
+  (CC-BY-NC-4.0). HOT labels are (c) OpenStreetMap contributors, ODbL-1.0.
+- Frozen with the weights: thresholds tree 0.2 / tree_group 0.15 (picked on HOT val in training), windows 60 m / 120 m,
+  group merge rule `drop_edge`.
+
+| File | sha256 |
+| --- | --- |
+| `best.pt` | `cb4cfad93000acddfe1a8b9701901523ffc099baad19583d2a48288368d25fdf` |
+| `model.onnx` | `4a59f1c2e958d54cf1bbf9b2ae1083a124043d1ac3a741de391509dc4cce6f8e` |
+| `thresholds.json` | `b0b13594471089fc39cf11333a0e2a96990d5e7e29727f7b7e818e70b4c2ca2d` |
+| `windows.json` | `e4adbef89e619b3b2a43a46a172edca19eceedd9a952b92a8d4fbc10686f2a7c` |
+| `config.json` | `e20727ba56154c7f9bc9ec9ecf0509549256dcd42697c84c18a47adc3483b8eb` |

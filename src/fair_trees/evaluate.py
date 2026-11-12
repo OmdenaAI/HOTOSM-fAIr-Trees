@@ -17,6 +17,7 @@ from fair_trees.dataset import (
     burn_boxes,
     labels_to_boxes,
     load_geojson,
+    masked_crown_boxes,
     rasterize_labels,
     rasterize_mask,
     window_boxes,
@@ -324,9 +325,10 @@ def region_units(
     """One unit per mosaic of each region labelling class ``label`` (1 tree, 2 tree_group), at the first of
     ``zooms`` the region has (else its lowest).
 
-    Ignore polygons only mask predictions; labels are dropped only where the footprint or chip validity
-    masks them. In a region labelling tree_group, tree predictions inside a group polygon are ignored, and
-    so are group predictions inside a group the 40 % rule drops at the unit's edge.
+    Ignore polygons and masked crowns (``masked_crown_boxes``) only mask predictions; labels are dropped
+    only where the footprint or chip validity masks them. In a region labelling tree_group, tree
+    predictions inside a group polygon are ignored, and so are group predictions inside a group the 40 %
+    rule drops at the unit's edge.
     """
     name = CLASSES[label - 1]
     units = []
@@ -345,14 +347,17 @@ def region_units(
             boxes = labels_to_boxes(labels, m.transform_3857, label)
             unmasked = m.valid & ~rasterize_mask(region, m.transform_3857, (h, w), ignore=False)
             clipped, kept = window_boxes(boxes, unmasked, 0, 0, w, h, MIN_BOX_FRACTION)
-            mask = rasterize_mask(region, m.transform_3857, (h, w)) if has_mask else None
+            masks = [rasterize_mask(region, m.transform_3857, (h, w))] if has_mask else []
             if groups:
-                extra = (
+                masks.append(
                     rasterize_labels(region, m.transform_3857, (h, w), 2)
                     if label == 1
                     else burn_boxes(clipped[~kept], (h, w))
                 )
-                mask = extra if mask is None else mask | extra
+            masked_crowns = masked_crown_boxes(labels, m.transform_3857)
+            if len(masked_crowns):
+                masks.append(burn_boxes(masked_crowns, (h, w)))
+            mask = np.logical_or.reduce(masks) if masks else None
             units.append(
                 EvalUnit(
                     unit_id=region.id if len(mosaics) == 1 else f"{region.id}#{k}",

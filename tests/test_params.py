@@ -158,6 +158,14 @@ def test_train_ranges(hp):
         parse_train_params(hp)
 
 
+def test_max_grad_norm_parsed():
+    assert TrainParams().max_grad_norm is None  # no clipping unless asked
+    assert parse_train_params({"max_grad_norm": 1}).max_grad_norm == 1.0
+    for bad in (0, -1.0, "big"):
+        with pytest.raises(ValueError, match="max_grad_norm"):
+            parse_train_params({"max_grad_norm": bad})
+
+
 def test_num_classes_parsed():
     assert TrainParams().num_classes is None
     assert parse_train_params({"num_classes": 1}).num_classes == 1
