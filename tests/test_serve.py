@@ -237,6 +237,28 @@ def test_request_exceeding_window_budget_is_rejected(write_oam_chip, fake_sessio
     assert len(s.calls) == 1
 
 
+def test_window_budget_is_checked_without_building_windows(
+    write_oam_chip, fake_session, tmp_path, monkeypatch
+):
+    [m] = mosaic_chips([write_oam_chip()])
+    p, default = InferenceParams(window_m=5, window_overlap=0.9), InferenceParams()
+    hw, gsd = m.rgb.shape[:2], m.gsd_m
+
+    def count(q):
+        return sum(len(window_grid(*hw, gsd, w, q.window_overlap)) for w in (q.window_m, q.group_window_m))
+
+    requested, baseline = count(p), count(default)
+
+    def no_grid(*args):
+        raise AssertionError("window_grid called while counting windows")
+
+    monkeypatch.setattr("fair_trees.serve.window_grid", no_grid)
+    s = fake_session()
+    with pytest.raises(ValueError, match=rf"need {requested} windows.*the {baseline} of the default"):
+        predict_session(s, tmp_path, {"window_m": 5, "window_overlap": 0.9})
+    assert s.calls == []
+
+
 def _eq_chip(write_oam_chip, z):
     """A chip of the tile whose north-west corner is (lon 0, lat 0) at zoom ``z``."""
     return write_oam_chip(2 ** (z - 1), 2 ** (z - 1), z)

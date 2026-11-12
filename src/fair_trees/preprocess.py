@@ -226,13 +226,30 @@ def _starts(length: int, size: int, stride: int) -> list[int]:
     return starts
 
 
-def window_grid(height: int, width: int, gsd_m: float, window_m: float, overlap: float) -> list[Window]:
-    """Row-major windows of window_m metres with the given overlap, shifted back at the edges."""
+def _start_count(length: int, size: int, stride: int) -> int:
+    """``len(_starts(length, size, stride))`` without building the list."""
+    return -(-(length - size) // stride) + 1
+
+
+def _window_geometry(
+    height: int, width: int, gsd_m: float, window_m: float, overlap: float
+) -> tuple[int, int, int, int]:
+    """Window width and height, clamped to the mosaic, and the x and y strides, all in pixels."""
     win = max(1, round(window_m / gsd_m))
     ww, wh = min(win, width), min(win, height)
-    stride_x = max(1, round(ww * (1 - overlap)))
-    stride_y = max(1, round(wh * (1 - overlap)))
+    return ww, wh, max(1, round(ww * (1 - overlap))), max(1, round(wh * (1 - overlap)))
+
+
+def window_grid(height: int, width: int, gsd_m: float, window_m: float, overlap: float) -> list[Window]:
+    """Row-major windows of window_m metres with the given overlap, shifted back at the edges."""
+    ww, wh, stride_x, stride_y = _window_geometry(height, width, gsd_m, window_m, overlap)
     return [Window(x, y, ww, wh) for y in _starts(height, wh, stride_y) for x in _starts(width, ww, stride_x)]
+
+
+def window_count(height: int, width: int, gsd_m: float, window_m: float, overlap: float) -> int:
+    """``len(window_grid(...))`` computed from the grid geometry, without building the windows."""
+    ww, wh, stride_x, stride_y = _window_geometry(height, width, gsd_m, window_m, overlap)
+    return _start_count(height, wh, stride_y) * _start_count(width, ww, stride_x)
 
 
 def is_blank(mosaic: Mosaic, window: Window, min_valid_fraction: float) -> bool:
