@@ -3,16 +3,16 @@ import json
 
 import numpy as np
 import pytest
-import shapely
 from PIL import Image
 from rasterio.transform import from_bounds
 from rasterio.warp import transform_bounds
 
-from experiments.converters import oamtcd
-from fair_trees.dataset import load_regions
-from fair_trees.params import CLASSES
-
+shapely = pytest.importorskip("shapely")  # the converter imports it too
 pytest.importorskip("geopandas")
+
+from experiments.converters import oamtcd  # noqa: E402
+from fair_trees.dataset import load_regions  # noqa: E402
+from fair_trees.params import CLASSES  # noqa: E402
 
 CRS = "EPSG:3395"
 X0, Y0 = 100_000.0, 100_000.0  # EPSG:3395 metres, ~0.9 degrees north and east: z19 and z20 both exist
