@@ -427,6 +427,10 @@ POINT_IN_METRES = {
     "properties": {"natural": "tree"},
 }
 LATITUDE_95 = _ring_feature(_square(10.0, 95.0, 0.1))
+# affine warns as it turns those inf coordinates into NaN pixel boxes
+OUT_OF_RANGE_WARNING = pytest.mark.filterwarnings(
+    "ignore:invalid value encountered in multiply:RuntimeWarning"
+)
 
 
 @pytest.mark.parametrize(
@@ -447,8 +451,10 @@ LATITUDE_95 = _ring_feature(_square(10.0, 95.0, 0.1))
             lambda geo: [_box(geo, FAR_PX), _box(geo, (5, 5, 60, 60), label=2)],
             id="only-a-group-on-the-chips-of-a-tree-only-model",
         ),
-        pytest.param(lambda geo: [IN_METRES], id="a-polygon-in-projected-metres"),
-        pytest.param(lambda geo: [POINT_IN_METRES], id="a-point-in-projected-metres"),
+        pytest.param(lambda geo: [IN_METRES], id="a-polygon-in-projected-metres", marks=OUT_OF_RANGE_WARNING),
+        pytest.param(
+            lambda geo: [POINT_IN_METRES], id="a-point-in-projected-metres", marks=OUT_OF_RANGE_WARNING
+        ),
     ],
 )
 def test_labels_on_no_train_chip_are_refused(monkeypatch, write_oam_chip, geo, weights, tmp_path, features):
@@ -470,7 +476,11 @@ def test_labels_on_no_train_chip_are_refused(monkeypatch, write_oam_chip, geo, w
     [
         pytest.param(lambda geo: [_box(geo, (330, 10, 340, 20))], id="a-polygon"),
         pytest.param(lambda geo: [geo.point_feature((335, 15), tags={"natural": "tree"})], id="a-tree-point"),
-        pytest.param(lambda geo: [_box(geo, (330, 10, 340, 20)), LATITUDE_95], id="and-one-out-of-range"),
+        pytest.param(
+            lambda geo: [_box(geo, (330, 10, 340, 20)), LATITUDE_95],
+            id="and-one-out-of-range",
+            marks=OUT_OF_RANGE_WARNING,
+        ),
     ],
 )
 def test_one_labelled_train_chip_among_empty_ones_trains(

@@ -161,6 +161,7 @@ def test_any_label_on_chips_counts_labels_on_present_tiles(
     assert any_label_on_chips(regions, classes, RegionCache(regions)) is expected
 
 
+@pytest.mark.filterwarnings("ignore:invalid value encountered in multiply:RuntimeWarning")
 def test_any_label_on_chips_skips_labels_outside_lon_lat_range(write_region):
     # pyproj maps latitude 95 to inf, so these boxes are NaN: neither class may count them, nor crash on them
     d = write_region("h", tiles=((0, 0),), classes=("tree", "tree_group"))
