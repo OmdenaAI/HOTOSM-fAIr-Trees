@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "fair-trees"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Tree and tree-group detection (RetinaNet) for HOT fAIr: preprocessing, decoding, serving, training, evaluation and ONNX export."
 readme = "README.md"
 license = "MIT"
