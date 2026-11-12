@@ -407,6 +407,28 @@ def _sized_tree(geo, xy_px):
 FAR_PX = (2000, 2000, 2010, 2010)  # z20 pixels: tiles south-east of every chip below
 
 
+def _ring_feature(ring, **properties):
+    return {
+        "type": "Feature",
+        "geometry": {"type": "Polygon", "coordinates": [ring]},
+        "properties": properties,
+    }
+
+
+def _square(x, y, side):
+    return [[x, y], [x + side, y], [x + side, y + side], [x, y + side], [x, y]]
+
+
+# pyproj maps coordinates outside longitude and latitude range to inf
+IN_METRES = _ring_feature(_square(500_000.0, 930_000.0, 10.0))  # a UTM polygon written as if lon/lat
+POINT_IN_METRES = {
+    "type": "Feature",
+    "geometry": {"type": "Point", "coordinates": [500_000.0, 930_000.0]},
+    "properties": {"natural": "tree"},
+}
+LATITUDE_95 = _ring_feature(_square(10.0, 95.0, 0.1))
+
+
 @pytest.mark.parametrize(
     "features",
     [
@@ -425,6 +447,8 @@ FAR_PX = (2000, 2000, 2010, 2010)  # z20 pixels: tiles south-east of every chip 
             lambda geo: [_box(geo, FAR_PX), _box(geo, (5, 5, 60, 60), label=2)],
             id="only-a-group-on-the-chips-of-a-tree-only-model",
         ),
+        pytest.param(lambda geo: [IN_METRES], id="a-polygon-in-projected-metres"),
+        pytest.param(lambda geo: [POINT_IN_METRES], id="a-point-in-projected-metres"),
     ],
 )
 def test_labels_on_no_train_chip_are_refused(monkeypatch, write_oam_chip, geo, weights, tmp_path, features):
@@ -435,17 +459,27 @@ def test_labels_on_no_train_chip_are_refused(monkeypatch, write_oam_chip, geo, w
     monkeypatch.setattr(T, "forward_loss", script.forward_loss)
     monkeypatch.setattr(T, "_validate", script.validate)
     with pytest.raises(
-        ValueError, match="no label falls on any train chip.*Check that the labels file covers"
+        ValueError, match="no label of the model's classes .* falls on any train chip.*Check that the labels"
     ):
         T.fine_tune(chips[:3], chips[3:], labels, {"epochs": 1}, weights=weights, out_dir=tmp_path / "ft")
     assert script.calls == 0 and not (tmp_path / "ft").exists()
 
 
-def test_one_labelled_train_chip_among_empty_ones_trains(monkeypatch, write_oam_chip, geo, weights, tmp_path):
+@pytest.mark.parametrize(
+    "features",
+    [
+        pytest.param(lambda geo: [_box(geo, (330, 10, 340, 20))], id="a-polygon"),
+        pytest.param(lambda geo: [geo.point_feature((335, 15), tags={"natural": "tree"})], id="a-tree-point"),
+        pytest.param(lambda geo: [_box(geo, (330, 10, 340, 20)), LATITUDE_95], id="and-one-out-of-range"),
+    ],
+)
+def test_one_labelled_train_chip_among_empty_ones_trains(
+    monkeypatch, write_oam_chip, geo, weights, tmp_path, features
+):
     # two separate train mosaics (two regions) and a val chip; only the second mosaic has a label
     chips = [write_oam_chip(4 * X0 + i, 4 * Y0, 22) for i in (0, 1, 5, 6, 10)]
     labels = tmp_path / "labels.geojson"
-    labels.write_text(json.dumps(geo.feature_collection([geo.box_polygon((330, 10, 340, 20))])))
+    labels.write_text(json.dumps({"type": "FeatureCollection", "features": features(geo)}))
     script = Script([0.5])
     monkeypatch.setattr(T, "forward_loss", script.forward_loss)
     monkeypatch.setattr(T, "_validate", script.validate)

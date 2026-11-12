@@ -652,8 +652,10 @@ def train(
     cache = RegionCache(train_regions)
     if not any_label_on_chips(train_regions, classes, cache):
         raise ValueError(
-            "no label falls on any train chip: there is nothing to learn. Check that the labels file covers "
-            "the same area as the chips (GeoJSON in longitude and latitude)."
+            f"no label of the model's classes {list(classes)} falls on any train chip: there is nothing to "
+            "learn. Check that the labels file covers the same area as the chips (GeoJSON in longitude and "
+            "latitude) and labels those classes there. Tree points without a diameter_crown are masked, not "
+            "labels, when most trees have one."
         )
     start_thresholds = dict(
         zip(classes, parse_class_thresholds(_beside(weights, "thresholds.json")), strict=False)

@@ -724,12 +724,15 @@ class RegionCache:
 
 
 def _on_present_tiles(geom: RegionGeom, boxes: np.ndarray) -> np.ndarray:
-    """Per box, whether it overlaps a present tile of the region with positive area."""
+    """Per box, whether it overlaps a present tile of the region with positive area; a non-finite box
+    (pyproj maps coordinates outside lon/lat range to inf) does not."""
     present = np.zeros((geom.nrows + 1, geom.ncols + 1), np.int64)
     for x, y in geom.tiles:
         present[y - geom.ymin + 1, x - geom.xmin + 1] = 1
     integral = present.cumsum(0).cumsum(1)
-    clipped = np.clip(boxes, 0, [geom.width, geom.height, geom.width, geom.height])
+    # zeroed before the integer cast, where NaN would become an out-of-bounds index; zero area never counts
+    finite = np.where(np.isfinite(boxes).all(axis=1, keepdims=True), boxes, 0)
+    clipped = np.clip(finite, 0, [geom.width, geom.height, geom.width, geom.height])
     positive = (clipped[:, 2] > clipped[:, 0]) & (clipped[:, 3] > clipped[:, 1])
     c1, r1 = (np.floor(clipped[:, :2] / geom.tile_px).astype(np.int64)).T
     c2, r2 = (np.ceil(clipped[:, 2:] / geom.tile_px).astype(np.int64)).T

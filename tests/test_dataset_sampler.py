@@ -1,4 +1,5 @@
 import dataclasses
+import json
 import logging
 import pickle
 
@@ -158,3 +159,16 @@ def test_any_label_on_chips_counts_labels_on_present_tiles(
     )
     regions = load_regions(d.parent)
     assert any_label_on_chips(regions, classes, RegionCache(regions)) is expected
+
+
+def test_any_label_on_chips_skips_labels_outside_lon_lat_range(write_region):
+    # pyproj maps latitude 95 to inf, so these boxes are NaN: neither class may count them, nor crash on them
+    d = write_region("h", tiles=((0, 0),), classes=("tree", "tree_group"))
+    ring = [[10.0, 95.0], [10.1, 95.0], [10.1, 95.1], [10.0, 95.1], [10.0, 95.0]]
+    labels = json.loads((d / "labels.geojson").read_text())
+    for label in (1, 2):
+        geometry = {"type": "Polygon", "coordinates": [ring]}
+        labels["features"].append({"type": "Feature", "geometry": geometry, "properties": {"label": label}})
+    (d / "labels.geojson").write_text(json.dumps(labels))
+    regions = load_regions(d.parent)
+    assert any_label_on_chips(regions, ("tree", "tree_group"), RegionCache(regions)) is False
