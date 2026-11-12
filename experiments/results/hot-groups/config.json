@@ -1,0 +1,77 @@
+{
+  "config": {
+    "weights": "runs/joint-base-wise-0.3/weights.pt",
+    "sources": [
+      "hot"
+    ],
+    "hyperparameters": {
+      "num_classes": 2,
+      "trainable_layers": 0,
+      "learning_rate": 0.001,
+      "momentum": 0.9,
+      "weight_decay": 0.0001,
+      "l2sp_alpha": 0.0,
+      "epochs": 10,
+      "patience": 3,
+      "min_delta": 0.005,
+      "batch_size": 4,
+      "samples_per_epoch": null,
+      "schedule": "cosine",
+      "amp": true,
+      "seed": 42,
+      "augment": {
+        "crop_m": [
+          30,
+          120
+        ]
+      }
+    },
+    "val": {
+      "zooms": [
+        20,
+        19
+      ],
+      "max_regions": null,
+      "window_m": 60,
+      "group_window_m": 120
+    },
+    "mlflow": true
+  },
+  "parsed": {
+    "epochs": 10,
+    "learning_rate": 0.001,
+    "momentum": 0.9,
+    "weight_decay": 0.0001,
+    "l2sp_alpha": 0.0,
+    "trainable_layers": 0,
+    "batch_size": 4,
+    "samples_per_epoch": null,
+    "schedule": "cosine",
+    "patience": 3,
+    "min_delta": 0.005,
+    "amp": true,
+    "seed": 42,
+    "ckpt_every_min": 10.0,
+    "keep_last": 4,
+    "zoom_weights": {
+      "19": 0.25,
+      "20": 0.5,
+      "21": 0.25
+    },
+    "source_alpha": 0.5,
+    "biome_alpha": 0.5,
+    "region_repeat_cap": null,
+    "empty_crop_cap": null,
+    "num_classes": 2,
+    "augment": {
+      "crop_m": [
+        30.0,
+        120.0
+      ],
+      "downscale": true,
+      "flips": false,
+      "rot90": false,
+      "colour_jitter": false
+    }
+  }
+}

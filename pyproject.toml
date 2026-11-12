@@ -1,0 +1,63 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fair-trees"
+version = "0.1.0"
+description = "Tree and tree-group detection (RetinaNet) for HOT fAIr: preprocessing, decoding, serving, training, evaluation and ONNX export."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+# Serving core only. Nothing here may pull in torch or scipy.
+dependencies = [
+    "affine>=3.0",
+    "numpy>=1.26",
+    "Pillow>=10.0",
+    "pyproj>=3.6",
+    "rasterio>=1.3",
+]
+
+[project.optional-dependencies]
+# torchvision is pinned exactly: train.build_model uses the private _resnet_fpn_extractor.
+train = [
+    "torch==2.11.0",
+    "torchvision==0.26.0",
+    "onnx>=1.17",
+    "scipy>=1.11",
+]
+test = [
+    "onnxruntime>=1.18",
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fair_trees"]
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
+torchvision = [{ index = "pytorch-cpu" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-m 'not integration'"
+markers = ["integration: needs weights/NEON.pt and the train extra (opt-in: pytest -m integration)"]
+tmp_path_retention_policy = "failed"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+# exploration notebooks keep long f-string report lines as they ran
+"experiments/notebooks/explore_*.ipynb" = ["E501"]

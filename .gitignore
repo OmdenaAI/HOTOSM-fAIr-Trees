@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+.venv-*/
+.pytest_cache/
+.ruff_cache/
+dist/
+build/
+# model weights, exports and local data never go into Git
+weights/
+data_local/
+tests/data_local/
+*.pt
+*.onnx
+mlruns/

@@ -1,0 +1,22 @@
+# hot_1ep_lr3e-4.yaml with L2-SP toward the release weights. The full HOT fine-tune moved the trainable
+# weights a squared distance of 31.5 from the release, its 0.5 weight blend 7.9; at 0.1 the penalty is
+# about as large as the detection loss at the blend's distance.
+weights: weights/NEON.pt          # relative to the Drive root
+sources: [hot]
+hyperparameters:
+  trainable_layers: 0
+  learning_rate: 0.0003
+  momentum: 0.9
+  weight_decay: 0.0001            # set to 0 by the parser: L2-SP replaces weight decay
+  l2sp_alpha: 0.1
+  epochs: 1
+  batch_size: 4
+  samples_per_epoch: null         # one epoch = the number of train chips, as on the platform
+  schedule: cosine
+  amp: true
+  seed: 42
+val:
+  zooms: [20, 19]
+  max_regions: null
+  window_m: 60                    # the window hot_platform.yaml and its weight blends were scored at
+mlflow: true

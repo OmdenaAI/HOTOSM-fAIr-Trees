@@ -1,0 +1,21 @@
+# One epoch of the platform fine-tune on HOT train: the full run's first epoch gave most of its HOT val
+# gain, so this asks whether stopping there forgets less. The cosine schedule decays to 0 within the epoch.
+weights: weights/NEON.pt          # relative to the Drive root
+sources: [hot]
+hyperparameters:
+  trainable_layers: 0
+  learning_rate: 0.001
+  momentum: 0.9
+  weight_decay: 0.0001
+  l2sp_alpha: 0.0
+  epochs: 1
+  batch_size: 4
+  samples_per_epoch: null         # one epoch = the number of train chips, as on the platform
+  schedule: cosine
+  amp: true
+  seed: 42
+val:
+  zooms: [20, 19]
+  max_regions: null
+  window_m: 60                    # the window hot_platform.yaml and its weight blends were scored at
+mlflow: true

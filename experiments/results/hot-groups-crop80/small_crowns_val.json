@@ -1,0 +1,649 @@
+{
+  "run_id": "hot-groups-crop80",
+  "part": "val",
+  "threshold": 0.2,
+  "crop_m": 12.0,
+  "by_size": [
+    {
+      "bin_m": [
+        0.0,
+        1.5
+      ],
+      "n_gt": 648,
+      "recall": 0.007716049382716084,
+      "misses_located": 0.19129082426127528,
+      "misses_faint": 0.5396578538102644,
+      "misses_median_best_iou": 0.0
+    },
+    {
+      "bin_m": [
+        1.5,
+        2.5
+      ],
+      "n_gt": 1663,
+      "recall": 0.10523150932050507,
+      "misses_located": 0.26814516129032256,
+      "misses_faint": 0.4327956989247312,
+      "misses_median_best_iou": 0.0
+    }
+  ],
+  "misses": [
+    {
+      "tile": 1,
+      "unit": 10,
+      "unit_id": "hot-val-30354-31224-0",
+      "index": 342,
+      "side_m": 1.0076326131820679,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.1416883021593094,
+      "lonlat": [
+        -13.2564305,
+        8.4482086
+      ]
+    },
+    {
+      "tile": 2,
+      "unit": 8,
+      "unit_id": "hot-val-30354-31222-0",
+      "index": 674,
+      "side_m": 1.0076402425765991,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.0,
+      "lonlat": [
+        -13.255202,
+        8.4596668
+      ]
+    },
+    {
+      "tile": 3,
+      "unit": 16,
+      "unit_id": "hot-val-30355-31224-0",
+      "index": 341,
+      "side_m": 1.0076416730880737,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.19230885803699493,
+      "lonlat": [
+        -13.2516112,
+        8.4495325
+      ]
+    },
+    {
+      "tile": 4,
+      "unit": 11,
+      "unit_id": "hot-val-30354-31225-0",
+      "index": 487,
+      "side_m": 1.0076467990875244,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.14361532032489777,
+      "lonlat": [
+        -13.2567617,
+        8.4406578
+      ]
+    },
+    {
+      "tile": 5,
+      "unit": 11,
+      "unit_id": "hot-val-30354-31225-0",
+      "index": 637,
+      "side_m": 1.0076467990875244,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.07551002502441406,
+      "lonlat": [
+        -13.2553556,
+        8.4430297
+      ]
+    },
+    {
+      "tile": 6,
+      "unit": 16,
+      "unit_id": "hot-val-30355-31224-0",
+      "index": 405,
+      "side_m": 1.0076507329940796,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.0813526064157486,
+      "lonlat": [
+        -13.251518,
+        8.4461882
+      ]
+    },
+    {
+      "tile": 7,
+      "unit": 15,
+      "unit_id": "hot-val-30355-31223-0",
+      "index": 298,
+      "side_m": 1.0076544284820557,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.15372392535209656,
+      "lonlat": [
+        -13.252392,
+        8.4539338
+      ]
+    },
+    {
+      "tile": 8,
+      "unit": 8,
+      "unit_id": "hot-val-30354-31222-0",
+      "index": 411,
+      "side_m": 1.0076582431793213,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.0,
+      "lonlat": [
+        -13.2569239,
+        8.4592839
+      ]
+    },
+    {
+      "tile": 9,
+      "unit": 16,
+      "unit_id": "hot-val-30355-31224-0",
+      "index": 290,
+      "side_m": 1.0076619386672974,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.30369261806394543,
+      "centre_score": 0.2178770899772644,
+      "lonlat": [
+        -13.2520826,
+        8.4504212
+      ]
+    },
+    {
+      "tile": 10,
+      "unit": 28,
+      "unit_id": "hot-val-30357-31225-0",
+      "index": 73,
+      "side_m": 1.0076693296432495,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.09305047988891602,
+      "lonlat": [
+        -13.2433634,
+        8.4425206
+      ]
+    },
+    {
+      "tile": 11,
+      "unit": 22,
+      "unit_id": "hot-val-30356-31224-0",
+      "index": 151,
+      "side_m": 1.2434568405151367,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.10465783625841141,
+      "lonlat": [
+        -13.2490893,
+        8.4488201
+      ]
+    },
+    {
+      "tile": 12,
+      "unit": 22,
+      "unit_id": "hot-val-30356-31224-0",
+      "index": 23,
+      "side_m": 1.2434580326080322,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.0,
+      "lonlat": [
+        -13.2493991,
+        8.4497566
+      ]
+    },
+    {
+      "tile": 13,
+      "unit": 21,
+      "unit_id": "hot-val-30356-31223-0",
+      "index": 465,
+      "side_m": 1.2434595823287964,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.0,
+      "lonlat": [
+        -13.2467524,
+        8.455669
+      ]
+    },
+    {
+      "tile": 14,
+      "unit": 8,
+      "unit_id": "hot-val-30354-31222-0",
+      "index": 56,
+      "side_m": 1.319989800453186,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.0,
+      "lonlat": [
+        -13.2604737,
+        8.4563592
+      ]
+    },
+    {
+      "tile": 15,
+      "unit": 25,
+      "unit_id": "hot-val-30357-31221-0",
+      "index": 9,
+      "side_m": 1.3553255796432495,
+      "bin": 0,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.07814757525920868,
+      "lonlat": [
+        -13.243407,
+        8.461962
+      ]
+    },
+    {
+      "tile": 16,
+      "unit": 4,
+      "unit_id": "hot-val-30353-31225-0",
+      "index": 767,
+      "side_m": 2.0152394771575928,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.01542018074542284,
+      "lonlat": [
+        -13.2607244,
+        8.4398432
+      ]
+    },
+    {
+      "tile": 17,
+      "unit": 4,
+      "unit_id": "hot-val-30353-31225-0",
+      "index": 274,
+      "side_m": 2.0152666568756104,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.19122441112995148,
+      "lonlat": [
+        -13.2635752,
+        8.4448763
+      ]
+    },
+    {
+      "tile": 18,
+      "unit": 11,
+      "unit_id": "hot-val-30354-31225-0",
+      "index": 242,
+      "side_m": 2.0152666568756104,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.2428537132385645,
+      "centre_score": 0.3077141344547272,
+      "lonlat": [
+        -13.2588304,
+        8.4415539
+      ]
+    },
+    {
+      "tile": 19,
+      "unit": 10,
+      "unit_id": "hot-val-30354-31224-0",
+      "index": 203,
+      "side_m": 2.0152833461761475,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.1052033081650734,
+      "lonlat": [
+        -13.2581652,
+        8.4469851
+      ]
+    },
+    {
+      "tile": 20,
+      "unit": 15,
+      "unit_id": "hot-val-30355-31223-0",
+      "index": 485,
+      "side_m": 2.0152909755706787,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.25220544141304413,
+      "centre_score": 0.21798919141292572,
+      "lonlat": [
+        -13.2515365,
+        8.4509074
+      ]
+    },
+    {
+      "tile": 21,
+      "unit": 17,
+      "unit_id": "hot-val-30355-31225-0",
+      "index": 663,
+      "side_m": 2.015293598175049,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.1344970315694809,
+      "lonlat": [
+        -13.2500086,
+        8.4405198
+      ]
+    },
+    {
+      "tile": 22,
+      "unit": 14,
+      "unit_id": "hot-val-30355-31222-0",
+      "index": 97,
+      "side_m": 2.015294075012207,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.14191383123397827,
+      "lonlat": [
+        -13.253874,
+        8.4573401
+      ]
+    },
+    {
+      "tile": 23,
+      "unit": 8,
+      "unit_id": "hot-val-30354-31222-0",
+      "index": 611,
+      "side_m": 2.0153074264526367,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.0,
+      "lonlat": [
+        -13.2554457,
+        8.4603306
+      ]
+    },
+    {
+      "tile": 24,
+      "unit": 16,
+      "unit_id": "hot-val-30355-31224-0",
+      "index": 2,
+      "side_m": 2.015308141708374,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.17444740235805511,
+      "lonlat": [
+        -13.2548057,
+        8.4499888
+      ]
+    },
+    {
+      "tile": 25,
+      "unit": 16,
+      "unit_id": "hot-val-30355-31224-0",
+      "index": 392,
+      "side_m": 2.015319347381592,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.13666999340057373,
+      "lonlat": [
+        -13.2513115,
+        8.446758
+      ]
+    },
+    {
+      "tile": 26,
+      "unit": 2,
+      "unit_id": "hot-val-30353-31223-0",
+      "index": 121,
+      "side_m": 2.135200023651123,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.14536508917808533,
+      "lonlat": [
+        -13.2608373,
+        8.4553785
+      ]
+    },
+    {
+      "tile": 27,
+      "unit": 8,
+      "unit_id": "hot-val-30354-31222-0",
+      "index": 581,
+      "side_m": 2.15032958984375,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.09385205060243607,
+      "lonlat": [
+        -13.2557148,
+        8.45744
+      ]
+    },
+    {
+      "tile": 28,
+      "unit": 22,
+      "unit_id": "hot-val-30356-31224-0",
+      "index": 478,
+      "side_m": 2.2511210441589355,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.0,
+      "lonlat": [
+        -13.2479641,
+        8.4490105
+      ]
+    },
+    {
+      "tile": 29,
+      "unit": 22,
+      "unit_id": "hot-val-30356-31224-0",
+      "index": 1110,
+      "side_m": 2.2511301040649414,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.0,
+      "centre_score": 0.0,
+      "lonlat": [
+        -13.2456755,
+        8.449435
+      ]
+    },
+    {
+      "tile": 30,
+      "unit": 22,
+      "unit_id": "hot-val-30356-31224-0",
+      "index": 1193,
+      "side_m": 2.251154899597168,
+      "bin": 1,
+      "matched": false,
+      "best_iou": 0.2316986616100765,
+      "centre_score": 0.28366294503211975,
+      "lonlat": [
+        -13.2450807,
+        8.4501573
+      ]
+    }
+  ],
+  "hits": [
+    {
+      "tile": 1,
+      "unit": 22,
+      "unit_id": "hot-val-30356-31224-0",
+      "index": 1045,
+      "side_m": 1.2434343099594116,
+      "bin": 0,
+      "matched": true,
+      "best_iou": 0.45407797761978763,
+      "centre_score": 0.237159863114357,
+      "lonlat": [
+        -13.2460302,
+        8.4479088
+      ]
+    },
+    {
+      "tile": 2,
+      "unit": 22,
+      "unit_id": "hot-val-30356-31224-0",
+      "index": 45,
+      "side_m": 1.243446707725525,
+      "bin": 0,
+      "matched": true,
+      "best_iou": 0.45344110155861705,
+      "centre_score": 0.24824795126914978,
+      "lonlat": [
+        -13.2494319,
+        8.4486729
+      ]
+    },
+    {
+      "tile": 3,
+      "unit": 22,
+      "unit_id": "hot-val-30356-31224-0",
+      "index": 1030,
+      "side_m": 1.2434613704681396,
+      "bin": 0,
+      "matched": true,
+      "best_iou": 0.42845943213971255,
+      "centre_score": 0.2007133811712265,
+      "lonlat": [
+        -13.2460423,
+        8.4481615
+      ]
+    },
+    {
+      "tile": 4,
+      "unit": 25,
+      "unit_id": "hot-val-30357-31221-0",
+      "index": 6,
+      "side_m": 1.3553245067596436,
+      "bin": 0,
+      "matched": true,
+      "best_iou": 0.42042191565064685,
+      "centre_score": 0.20865045487880707,
+      "lonlat": [
+        -13.2437235,
+        8.4620058
+      ]
+    },
+    {
+      "tile": 5,
+      "unit": 7,
+      "unit_id": "hot-val-30354-31221-0",
+      "index": 99,
+      "side_m": 1.461078405380249,
+      "bin": 0,
+      "matched": true,
+      "best_iou": 0.5975806721945579,
+      "centre_score": 0.22602218389511108,
+      "lonlat": [
+        -13.257319,
+        8.4625576
+      ]
+    },
+    {
+      "tile": 6,
+      "unit": 14,
+      "unit_id": "hot-val-30355-31222-0",
+      "index": 178,
+      "side_m": 2.01529860496521,
+      "bin": 1,
+      "matched": true,
+      "best_iou": 0.6350073746815013,
+      "centre_score": 0.20391781628131866,
+      "lonlat": [
+        -13.2522982,
+        8.4564994
+      ]
+    },
+    {
+      "tile": 7,
+      "unit": 16,
+      "unit_id": "hot-val-30355-31224-0",
+      "index": 179,
+      "side_m": 2.015301465988159,
+      "bin": 1,
+      "matched": true,
+      "best_iou": 0.6177042375348092,
+      "centre_score": 0.24166789650917053,
+      "lonlat": [
+        -13.2530435,
+        8.4485647
+      ]
+    },
+    {
+      "tile": 8,
+      "unit": 15,
+      "unit_id": "hot-val-30355-31223-0",
+      "index": 418,
+      "side_m": 2.0153088569641113,
+      "bin": 1,
+      "matched": true,
+      "best_iou": 0.46604112028528494,
+      "centre_score": 0.3088728189468384,
+      "lonlat": [
+        -13.251862,
+        8.4512583
+      ]
+    },
+    {
+      "tile": 9,
+      "unit": 13,
+      "unit_id": "hot-val-30355-31221-0",
+      "index": 295,
+      "side_m": 2.015316963195801,
+      "bin": 1,
+      "matched": true,
+      "best_iou": 0.7718571760113904,
+      "centre_score": 0.30493611097335815,
+      "lonlat": [
+        -13.251803,
+        8.4636162
+      ]
+    },
+    {
+      "tile": 10,
+      "unit": 15,
+      "unit_id": "hot-val-30355-31223-0",
+      "index": 296,
+      "side_m": 2.015317916870117,
+      "bin": 1,
+      "matched": true,
+      "best_iou": 0.6615563925883925,
+      "centre_score": 0.23042038083076477,
+      "lonlat": [
+        -13.2523792,
+        8.4538111
+      ]
+    },
+    {
+      "tile": 11,
+      "unit": 22,
+      "unit_id": "hot-val-30356-31224-0",
+      "index": 212,
+      "side_m": 2.2511255741119385,
+      "bin": 1,
+      "matched": true,
+      "best_iou": 0.6146727792477306,
+      "centre_score": 0.21953053772449493,
+      "lonlat": [
+        -13.2485488,
+        8.4496923
+      ]
+    }
+  ]
+}

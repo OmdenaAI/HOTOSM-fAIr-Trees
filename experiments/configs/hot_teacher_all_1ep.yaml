@@ -1,0 +1,21 @@
+# hot_1ep_lr1e-3.yaml on hot-teacher-all: HOT train with every release-model crown that touches no HOT
+# label masked, so training is not punished for trees the mappers did not map. Val is unchanged.
+weights: weights/NEON.pt          # relative to the Drive root
+sources: [hot-teacher-all]
+hyperparameters:
+  trainable_layers: 0
+  learning_rate: 0.001
+  momentum: 0.9
+  weight_decay: 0.0001
+  l2sp_alpha: 0.0
+  epochs: 1
+  batch_size: 4
+  samples_per_epoch: null         # one epoch = the number of train chips, as on the platform
+  schedule: cosine
+  amp: true
+  seed: 42
+val:
+  zooms: [20, 19]
+  max_regions: null
+  window_m: 60                    # the window hot_platform.yaml and its weight blends were scored at
+mlflow: true
