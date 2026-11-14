@@ -1,0 +1,5 @@
+outs:
+- md5: ef1af66b755d6dcefb7b93952bd6081d
+  size: 39
+  hash: md5
+  path: thresholds.json

@@ -1,0 +1,5 @@
+[core]
+    analytics = false
+    remote = hf
+['remote "hf"']
+    url = https://huggingface.co/datasets/OmarHelmy/fair-trees-weights/resolve/main

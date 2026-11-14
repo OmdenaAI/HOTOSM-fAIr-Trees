@@ -30,6 +30,13 @@ The trained two-class model is on Hugging Face:
 [`OmarHelmy/retinanet-tree-groups`](https://huggingface.co/OmarHelmy/retinanet-tree-groups), tag `v0.1.0`, with
 `best.pt`, `model.onnx`, `thresholds.json` and `windows.json`. `experiments/DATA_SOURCES.md` lists their sha256 values.
 
+In a clone, DVC fetches those four files and the DeepForest `NEON.pt` start weights into `weights/`, then checks
+their sha256 against `weights/SHA256SUMS` (needs `uv`; no account or token):
+
+```bash
+experiments/weights.sh pull
+```
+
 ## Licence
 
 - Code: MIT (see `LICENSE`).
@@ -67,7 +74,8 @@ Calling `fine_tune` again on the same `out_dir` resumes an interrupted run, or r
 
 ## Integration tests
 
-The opt-in parity tests need two local downloads (`weights/NEON.pt` and `tests/data_local/OSBS_029.tif`).
+The opt-in parity tests need `weights/NEON.pt` (from `experiments/weights.sh pull`) and one local download,
+`tests/data_local/OSBS_029.tif`.
 `experiments/DATA_SOURCES.md` lists the URLs, sha256 values and the download commands.
 
 The DeepForest parity test needs `deepforest==2.1.0` (see `experiments/requirements.txt`) in its own

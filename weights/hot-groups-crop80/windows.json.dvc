@@ -1,0 +1,5 @@
+outs:
+- md5: 55b1881792a179e5dadc304ab3ccd6dd
+  size: 49
+  hash: md5
+  path: windows.json

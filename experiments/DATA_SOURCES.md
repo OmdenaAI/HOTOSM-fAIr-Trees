@@ -10,10 +10,10 @@ Local, git-ignored downloads used by the opt-in integration tests (`uv run pytes
 | `data_local/NeonTreeEvaluation/evaluation/RGB/*.tif` (194 annotated plots with an RGB image; 226 annotation XMLs, 32 have no image in this release) | https://zenodo.org/api/records/5914554/files/evaluation.zip/content (3,853,532,101 bytes, md5 f0c444fc59cf0115ce8c981a576fab77 per Zenodo) | extracted by HTTP range requests, whole-zip hash not computed; sha256 of the sorted `sha256sum` listing of annotations/*.xml + evaluation/RGB/*.tif: f32048b7ccf4e77da242fb1b052378ace70f91f65fb655c6a663c6cb80c67a30 | 2026-10-18 |
 
 ```bash
-mkdir -p weights tests/data_local
-curl -L -o weights/NEON.pt https://huggingface.co/weecology/deepforest-tree/resolve/main/NEON.pt
+mkdir -p tests/data_local
+experiments/weights.sh pull     # weights/NEON.pt via DVC (same file as the URL above)
 curl -L -o tests/data_local/OSBS_029.tif https://raw.githubusercontent.com/weecology/DeepForest/main/src/deepforest/data/OSBS_029.tif
-sha256sum weights/NEON.pt tests/data_local/OSBS_029.tif
+sha256sum tests/data_local/OSBS_029.tif
 ```
 
 NeonTreeEvaluation layout matches the loader defaults (`evaluation/RGB/<PLOT>.tif`, `annotations/<PLOT>.xml`, Pascal VOC pixel boxes); no path constants changed. Only annotated plots' RGB tifs are extracted; the zip also holds LiDAR, hyperspectral and CHM data that this project does not use.
@@ -221,6 +221,18 @@ column says CC-BY on every `restor/tcd` row.
 - The notebook's contact sheet draws canopy as each feature's bounding rectangle, which usually falls outside a
   chip, so it shows no canopy; shading the masked pixels of the `restor/tcd-nc` test tiles locally showed the canopy
   masked and the trees inside it left unmasked.
+
+## Model files under DVC
+
+`weights/` is tracked by DVC: Git holds a `.dvc` receipt per file (md5 + size) and `weights/SHA256SUMS`; the files
+are in the public Hugging Face dataset repo https://huggingface.co/datasets/OmarHelmy/fair-trees-weights (DVC's
+content-addressed cache), read as a plain HTTP remote, so pulling needs no account. `experiments/weights.sh pull`
+fetches and checks them; `experiments/weights.sh push` uploads new ones (write access to that repo needed).
+
+| Path | Same file as | Licence |
+| --- | --- | --- |
+| `weights/NEON.pt` | weecology/deepforest-tree `NEON.pt` (sha256 above) | MIT |
+| `weights/hot-groups-crop80/{best.pt,model.onnx,thresholds.json,windows.json}` | `OmarHelmy/retinanet-tree-groups` `v0.1.0` (sha256 below) | CC-BY-NC-4.0 |
 
 ## Published model weights
 
