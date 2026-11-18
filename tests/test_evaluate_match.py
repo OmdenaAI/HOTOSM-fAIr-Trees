@@ -7,8 +7,10 @@ from fair_trees.evaluate import (  # noqa: E402
     Counts,
     aoi_f1,
     average_precision,
+    count_centre_matches,
     count_matches,
     iou_matrix,
+    match_centres,
     match_hungarian,
     point_in_box_recall,
     prf,
@@ -66,3 +68,46 @@ def test_point_in_box_recall():
     boxes = np.array([[0, 0, 10, 10]], np.float32)
     assert point_in_box_recall(np.array([[5, 5], [50, 50], [10, 10]]), boxes) == pytest.approx(2 / 3)
     assert point_in_box_recall(np.zeros((0, 2)), boxes) == 0.0
+
+
+def test_centre_match_pairs_a_small_truth_with_the_larger_box_over_it():
+    gt = np.array([[4, 4, 6, 6]], np.float32)  # a 2 px tag inside an 8 px box: IoU 0.06
+    pred = np.array([[1, 1, 9, 9]], np.float32)
+    assert match_hungarian(pred, gt) == []
+    assert match_centres(pred, gt) == [(0, 0)]
+    assert count_centre_matches(pred, gt) == Counts(tp=1, fp=0, fn=0)
+
+
+def test_centre_match_is_one_to_one():
+    gt = np.array([[2, 2, 4, 4], [6, 6, 8, 8]], np.float32)  # two truth centres in one box
+    pred = np.array([[0, 0, 10, 10]], np.float32)
+    assert len(match_centres(pred, gt)) == 1
+    assert count_centre_matches(pred, gt) == Counts(tp=1, fp=0, fn=1)
+
+
+def test_centre_match_ignores_a_truth_centre_outside_every_box():
+    gt = np.array([[20, 20, 30, 30]], np.float32)  # overlaps the box, but its centre (25, 25) is outside
+    pred = np.array([[0, 0, 24, 24]], np.float32)
+    assert match_centres(pred, gt) == []
+    assert count_centre_matches(pred, gt) == Counts(tp=0, fp=1, fn=1)
+
+
+def test_centre_match_keeps_as_many_pairs_as_possible():
+    gt = np.array([[4, 4, 6, 6], [14, 4, 16, 6]], np.float32)  # centres (5, 5) and (15, 5)
+    # box 0 covers both centres and is nearest to centre 0; box 1 covers centre 0 only
+    pred = np.array([[0, 0, 20, 10], [3, 3, 7, 7]], np.float32)
+    assert match_centres(pred, gt) == [(0, 1), (1, 0)]
+
+
+def test_centre_match_prefers_the_box_centred_nearest():
+    gt = np.array([[9, 9, 11, 11]], np.float32)  # centre (10, 10)
+    pred = np.array([[0, 0, 12, 12], [6, 6, 14, 14]], np.float32)  # centres (6, 6) and (10, 10)
+    assert match_centres(pred, gt) == [(1, 0)]
+
+
+def test_centre_match_empty_sides():
+    gt = np.array([[0, 0, 10, 10]], np.float32)
+    none = np.zeros((0, 4), np.float32)
+    assert match_centres(none, gt) == [] and match_centres(gt, none) == []
+    assert count_centre_matches(none, gt) == Counts(0, 0, 1)
+    assert count_centre_matches(gt, none) == Counts(0, 1, 0)

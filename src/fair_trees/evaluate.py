@@ -98,20 +98,56 @@ def aoi_f1(units: Sequence[Counts]) -> float:
     return sum((u.tp + u.fn) * prf(u)[2] for u in units) / total
 
 
-def point_in_box_recall(points: np.ndarray, boxes: np.ndarray) -> float:
-    """Share of (x, y) points inside any xyxy box, edges inclusive."""
+def points_in_boxes(points: np.ndarray, boxes: np.ndarray) -> np.ndarray:
+    """(points, boxes) bool: (x, y) point i inside xyxy box j, edges inclusive."""
     points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
-    if len(points) == 0:
-        return 0.0
     boxes = np.asarray(boxes, dtype=np.float64).reshape(-1, 4)
     x, y = points[:, None, 0], points[:, None, 1]
-    inside = (
+    return (
         (x >= boxes[None, :, 0])
         & (x <= boxes[None, :, 2])
         & (y >= boxes[None, :, 1])
         & (y <= boxes[None, :, 3])
     )
-    return float(inside.any(axis=1).mean())
+
+
+def point_in_box_recall(points: np.ndarray, boxes: np.ndarray) -> float:
+    """Share of (x, y) points inside any xyxy box, edges inclusive."""
+    inside = points_in_boxes(points, boxes)
+    return float(inside.any(axis=1).mean()) if len(inside) else 0.0
+
+
+def box_centres(boxes: np.ndarray) -> np.ndarray:
+    """(N, 2) float64 centres of xyxy boxes."""
+    boxes = np.asarray(boxes, dtype=np.float64).reshape(-1, 4)
+    return (boxes[:, :2] + boxes[:, 2:]) / 2
+
+
+def match_centres(pred: np.ndarray, gt: np.ndarray) -> list[tuple[int, int]]:
+    """One-to-one (pred, gt) pairs in which the truth box's centre lies inside the predicted box (edges
+    inclusive): as many pairs as can be made, and among those the smallest total distance between the
+    paired centres.
+
+    The truth box's size plays no part, so a mapper's crown-size tag cannot fail a tree that was found. A
+    box over several truth centres still pairs with one of them only.
+    """
+    if len(pred) == 0 or len(gt) == 0:
+        return []
+    from scipy.optimize import linear_sum_assignment
+
+    pred_centres, gt_centres = box_centres(pred), box_centres(gt)
+    allowed = points_in_boxes(gt_centres, pred).T  # (pred, gt)
+    distance = np.linalg.norm(pred_centres[:, None, :] - gt_centres[None, :, :], axis=2)
+    # an allowed pair costs under 1 and any other pair more than every allowed pair together, so the
+    # cheapest assignment has the most allowed pairs first and the shortest distances second
+    cost = np.where(allowed, distance / (distance.max() + 1.0), min(allowed.shape) + 1.0)
+    rows, cols = linear_sum_assignment(cost)
+    return sorted((int(r), int(c)) for r, c in zip(rows, cols, strict=True) if allowed[r, c])
+
+
+def count_centre_matches(pred: np.ndarray, gt: np.ndarray) -> Counts:
+    tp = len(match_centres(pred, gt))
+    return Counts(tp=tp, fp=len(pred) - tp, fn=len(gt) - tp)
 
 
 SWEEP_THRESHOLDS = np.round(np.linspace(0.05, 0.95, 19), 2)
