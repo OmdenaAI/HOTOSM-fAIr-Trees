@@ -1,0 +1,30 @@
+# hot_groups_crop80_5ep.yaml with seed 43 instead of 42, the one change: the seed sets which crops each
+# epoch draws, so the F1 gap between the two runs is the run-to-run noise of the recipe. A later change
+# counts as a gain only when it is larger than that gap.
+weights: runs/joint-base-wise-0.3/weights.pt  # relative to the Drive root
+sources: [hot]
+hyperparameters:
+  num_classes: 2
+  trainable_layers: 0
+  learning_rate: 0.001
+  momentum: 0.9
+  weight_decay: 0.0001
+  l2sp_alpha: 0.0
+  epochs: 5
+  patience: 5
+  min_delta: 0.005
+  batch_size: 4
+  samples_per_epoch: null         # one epoch = the number of train chips, as on the platform
+  schedule: cosine
+  amp: true
+  seed: 43
+  ckpt_every_min: 60
+  keep_last: 5
+  augment:
+    crop_m: [30, 80]
+val:
+  zooms: [20, 19]
+  max_regions: null
+  window_m: 60                    # the tree window hot_platform.yaml and its weight blends were scored at
+  group_window_m: 120
+mlflow: true
