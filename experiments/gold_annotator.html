@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Crown Annotator</title>
+<style>
+  :root {
+    --bg: #f6f6f4; --panel: #ffffff; --text: #1d1d1b; --muted: #6b6b66; --line: #d9d9d4;
+    --accent: #0a7d55; --warn: #b4551b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #161615; --panel: #20201f; --text: #ececea; --muted: #9c9c96; --line: #383836;
+      --accent: #3ccf95; --warn: #f08c4a; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; padding: 10px 16px;
+    border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0 8px 0 0; }
+  label { color: var(--muted); }
+  input[type=text] { padding: 4px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg);
+    color: var(--text); width: 9em; }
+  button { padding: 5px 10px; border: 1px solid var(--line); border-radius: 4px; background: var(--bg);
+    color: var(--text); cursor: pointer; }
+  button:hover { border-color: var(--muted); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  main { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; }
+  #stage { position: relative; background: #000; line-height: 0; user-select: none; touch-action: none; }
+  canvas { cursor: crosshair; display: block; max-width: calc(100vw - 32px); height: auto; }
+  aside { flex: 1 1 260px; min-width: 240px; max-width: 420px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 12px;
+    margin-bottom: 12px; }
+  .big { font-size: 22px; font-variant-numeric: tabular-nums; }
+  .status { font-weight: 600; }
+  .status.box { color: var(--accent); } .status.flag { color: var(--warn); }
+  kbd { border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 3px; padding: 0 4px;
+    font: 12px ui-monospace, monospace; background: var(--bg); }
+  table.keys td { padding: 2px 8px 2px 0; vertical-align: top; }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--accent); width: 0; }
+  .muted { color: var(--muted); }
+  #empty { padding: 40px 16px; max-width: 640px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Crown annotator</h1>
+  <label>Annotator <input type="text" id="who" placeholder="your name"></label>
+  <button id="open">Open folder…</button>
+  <input type="file" id="folder" webkitdirectory multiple class="hidden">
+  <label>Set <select id="set"></select></label>
+  <button id="import">Import saved JSON…</button><input type="file" id="importFile" accept=".json" class="hidden">
+  <button id="export" class="primary">Download annotations</button>
+  <span id="saved" class="muted"></span>
+</header>
+
+<div id="empty">
+  <p>Open the <code>annotate</code> folder (the one holding <code>items.json</code> and <code>crops/</code>).
+    Enter your name first: progress is saved in this browser under your name and the set, and the
+    download holds everything you drew.</p>
+  <p class="muted">Draw a box around the crown that contains the red dot. The edge of the crown is the edge
+    of the foliage, not its shadow. The tag size is not shown on purpose.</p>
+</div>
+
+<main id="app" class="hidden">
+  <div id="stage"><canvas id="cv"></canvas></div>
+  <aside>
+    <div class="card">
+      <div class="big"><span id="pos"></span></div>
+      <div class="bar"><div id="prog"></div></div>
+      <div class="muted" id="done"></div>
+    </div>
+    <div class="card">
+      <div>Item <b id="itemId"></b></div>
+      <div>Saved: <span id="status" class="status"></span></div>
+      <div>Box now: <span id="live" class="big"></span></div>
+    </div>
+    <div class="card">
+      <table class="keys">
+        <tr><td>drag</td><td>draw the crown box (drag again to redraw)</td></tr>
+        <tr><td><kbd>Enter</kbd> / <kbd>Space</kbd></td><td>save the box, next</td></tr>
+        <tr><td><kbd>1</kbd></td><td>not a tree, next</td></tr>
+        <tr><td><kbd>2</kbd></td><td>can't tell, next</td></tr>
+        <tr><td><kbd>3</kbd></td><td>merged with neighbours, next</td></tr>
+        <tr><td><kbd>Backspace</kbd></td><td>clear this item</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>previous / next</td></tr>
+        <tr><td><kbd>U</kbd></td><td>jump to the first unsaved item</td></tr>
+        <tr><td><kbd>D</kbd></td><td>hide / show the dot</td></tr>
+        <tr><td><kbd>B</kbd></td><td>brightness: normal, bright, brighter</td></tr>
+        <tr><td><kbd>P</kbd></td><td>smooth / sharp pixels</td></tr>
+      </table>
+    </div>
+  </aside>
+</main>
+
+<script>
+"use strict";
+const VIEW_PX = 560;            // canvas side for the crop
+const SCALE_M = 5;              // scale bar length
+const FLAGS = { 1: "not_a_tree", 2: "cant_tell", 3: "merged" };
+const BRIGHT = [1, 1.35, 1.7];
+
+const $ = (id) => document.getElementById(id);
+const cv = $("cv"), ctx = cv.getContext("2d");
+cv.width = cv.height = VIEW_PX;
+
+let sets = {};                  // name -> {set, crop_m, items}
+let files = {};                 // relative path ("crops/g0001.png") -> File
+let items = [], setName = "", idx = 0;
+let ann = {};                   // id -> record
+let img = null, drag = null, draft = null, shownAt = 0;
+let showDot = true, bright = 0, sharp = false;
+
+function storeKey() { return `gold-crowns:${setName}:${$("who").value.trim()}`; }
+function save() {
+  try { localStorage.setItem(storeKey(), JSON.stringify(ann)); $("saved").textContent = "saved in browser"; }
+  catch (e) { $("saved").textContent = "browser storage unavailable: download often"; }
+}
+function load() {
+  try { ann = JSON.parse(localStorage.getItem(storeKey()) || "{}"); } catch (e) { ann = {}; }
+}
+
+$("open").onclick = () => {
+  if (!$("who").value.trim()) { alert("Enter your name first."); $("who").focus(); return; }
+  $("folder").click();
+};
+$("folder").onchange = async (ev) => {
+  files = {}; sets = {};
+  for (const f of ev.target.files) {
+    const rel = f.webkitRelativePath.split("/").slice(1).join("/");  // drop the picked folder's name
+    files[rel] = f;
+    if (/^items(_\w+)?\.json$/.test(rel)) {
+      const body = JSON.parse(await f.text());
+      sets[body.set] = body;
+    }
+  }
+  const names = Object.keys(sets).sort();
+  if (!names.length) { alert("No items.json in this folder."); return; }
+  $("set").innerHTML = names.map((n) => `<option>${n}</option>`).join("");
+  start(names[0]);
+};
+$("set").onchange = () => start($("set").value);
+$("who").onchange = () => { if (setName) start(setName); };
+
+function start(name) {
+  setName = name; items = sets[name].items; load();
+  $("empty").classList.add("hidden"); $("app").classList.remove("hidden");
+  idx = firstUnsaved(); show();
+}
+function firstUnsaved() { const k = items.findIndex((it) => !ann[it.id]); return k < 0 ? 0 : k; }
+
+function show() {
+  const it = items[idx];
+  draft = ann[it.id] && ann[it.id].status === "box" ? { ...ann[it.id] } : null;
+  const f = files[it.file];
+  if (!f) { alert(`Missing ${it.file}`); return; }
+  const url = URL.createObjectURL(f);
+  const im = new Image();
+  im.onload = () => { img = im; URL.revokeObjectURL(url); shownAt = performance.now(); draw(); };
+  im.src = url;
+  panel();
+}
+
+function k() { return VIEW_PX / items[idx].size_px; }   // view px per crop px
+
+function draw() {
+  if (!img) return;
+  const it = items[idx], s = k();
+  ctx.imageSmoothingEnabled = !sharp;
+  ctx.filter = `brightness(${BRIGHT[bright]})`;
+  ctx.drawImage(img, 0, 0, VIEW_PX, VIEW_PX);
+  ctx.filter = "none";
+  if (draft) {
+    ctx.strokeStyle = "#00e5ff";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(draft.x0 * s, draft.y0 * s, (draft.x1 - draft.x0) * s, (draft.y1 - draft.y0) * s);
+  }
+  if (showDot) {
+    const [px, py] = it.point;
+    ctx.beginPath(); ctx.arc(px * s, py * s, 4, 0, 2 * Math.PI);
+    ctx.fillStyle = "#ff2d55"; ctx.fill(); ctx.lineWidth = 1.5; ctx.strokeStyle = "#fff"; ctx.stroke();
+  }
+  // scale bar
+  const len = SCALE_M / it.m_per_px * s;
+  ctx.fillStyle = "rgba(0,0,0,.6)"; ctx.fillRect(8, VIEW_PX - 30, len + 16, 22);
+  ctx.fillStyle = "#fff"; ctx.fillRect(16, VIEW_PX - 16, len, 4);
+  ctx.font = "12px system-ui"; ctx.fillText(`${SCALE_M} m`, 16, VIEW_PX - 20);
+}
+
+function sizeM(r) {
+  const m = items[idx].m_per_px;
+  return { w: (r.x1 - r.x0) * m, h: (r.y1 - r.y0) * m };
+}
+
+function panel() {
+  const it = items[idx], rec = ann[it.id];
+  const n = items.filter((x) => ann[x.id]).length;
+  $("pos").textContent = `${idx + 1} / ${items.length}`;
+  $("prog").style.width = `${(100 * n) / items.length}%`;
+  $("done").textContent = `${n} saved, ${items.length - n} to go`;
+  $("itemId").textContent = it.id;
+  const st = $("status");
+  st.className = "status " + (rec ? (rec.status === "box" ? "box" : "flag") : "");
+  st.textContent = !rec ? "nothing yet" : rec.status === "box"
+    ? `box ${rec.diameter_m.toFixed(1)} m` : rec.status.replace(/_/g, " ");
+  if (draft) { const { w, h } = sizeM(draft); $("live").textContent = `${w.toFixed(1)} × ${h.toFixed(1)} m`; }
+  else $("live").textContent = "–";
+}
+
+function toCrop(ev) {
+  const r = cv.getBoundingClientRect(), s = k(), size = items[idx].size_px;
+  const clamp = (v) => Math.max(0, Math.min(size, v));
+  return [clamp((ev.clientX - r.left) * (VIEW_PX / r.width) / s), clamp((ev.clientY - r.top) * (VIEW_PX / r.height) / s)];
+}
+cv.addEventListener("pointerdown", (ev) => { cv.setPointerCapture(ev.pointerId); drag = toCrop(ev); });
+cv.addEventListener("pointermove", (ev) => {
+  if (!drag) return;
+  const [x, y] = toCrop(ev);
+  draft = { x0: Math.min(drag[0], x), y0: Math.min(drag[1], y), x1: Math.max(drag[0], x), y1: Math.max(drag[1], y) };
+  draw(); panel();
+});
+cv.addEventListener("pointerup", () => {
+  drag = null;
+  if (draft && (draft.x1 - draft.x0 < 1 || draft.y1 - draft.y0 < 1)) draft = null;  // a click, not a box
+  draw(); panel();
+});
+
+function record(status) {
+  const it = items[idx];
+  const base = { id: it.id, status, annotator: $("who").value.trim(), set: setName,
+    seconds: Math.round((performance.now() - shownAt) / 100) / 10, saved_at: new Date().toISOString() };
+  if (status === "box") {
+    if (!draft) { flash("Draw a box first, or press 1, 2 or 3."); return false; }
+    const { w, h } = sizeM(draft);
+    const r = (v) => Math.round(v * 100) / 100;
+    Object.assign(base, { x0: r(draft.x0), y0: r(draft.y0), x1: r(draft.x1), y1: r(draft.y1),
+      width_m: r(w), height_m: r(h), diameter_m: r((w + h) / 2) });
+  }
+  ann[it.id] = base; save(); return true;
+}
+function go(d) { idx = Math.max(0, Math.min(items.length - 1, idx + d)); show(); }
+function flash(msg) { $("saved").textContent = msg; }
+
+document.addEventListener("keydown", (ev) => {
+  if (!items.length || ev.target.tagName === "INPUT") return;
+  const key = ev.key;
+  if (key === "Enter" || key === " ") { ev.preventDefault(); if (record("box")) go(1); }
+  else if (key in FLAGS) { record(FLAGS[key]); go(1); }
+  else if (key === "Backspace") { ev.preventDefault(); delete ann[items[idx].id]; draft = null; save(); draw(); panel(); }
+  else if (key === "ArrowRight") go(1);
+  else if (key === "ArrowLeft") go(-1);
+  else if (key === "u" || key === "U") { idx = firstUnsaved(); show(); }
+  else if (key === "d" || key === "D") { showDot = !showDot; draw(); }
+  else if (key === "b" || key === "B") { bright = (bright + 1) % BRIGHT.length; draw(); }
+  else if (key === "p" || key === "P") { sharp = !sharp; draw(); }
+});
+
+const FIELDS = ["id", "status", "x0", "y0", "x1", "y1", "width_m", "height_m", "diameter_m", "annotator", "set",
+  "seconds", "saved_at"];
+function download(name, text, type) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], { type })); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+$("export").onclick = () => {
+  if (!setName) return;
+  const who = $("who").value.trim().replace(/\W+/g, "_") || "anon";
+  const rows = items.map((it) => ann[it.id]).filter(Boolean);
+  const csv = [FIELDS.join(","), ...rows.map((r) => FIELDS.map((f) => (r[f] === undefined ? "" : r[f])).join(","))].join("\n");
+  download(`gold_${setName}_${who}.csv`, csv + "\n", "text/csv");
+  download(`gold_${setName}_${who}.json`, JSON.stringify(ann, null, 1), "application/json");
+};
+$("import").onclick = () => { if (setName) $("importFile").click(); else alert("Open the folder first."); };
+$("importFile").onchange = async (ev) => {
+  const f = ev.target.files[0]; if (!f) return;
+  const got = JSON.parse(await f.text());
+  const ids = new Set(items.map((it) => it.id));
+  let n = 0;
+  for (const [id, rec] of Object.entries(got)) if (ids.has(id)) { ann[id] = rec; n++; }
+  save(); idx = firstUnsaved(); show(); flash(`imported ${n} items`);
+};
+</script>
+</body>
+</html>
