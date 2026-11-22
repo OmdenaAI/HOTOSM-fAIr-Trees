@@ -1,0 +1,30 @@
+# hot_groups_crop80_5ep.yaml on shards/hot-relabel instead of shards/hot, the one change: HOT train labels
+# tagged exactly 1 m become 2.5 m crowns and those tagged 2 m become 3.75 m (the hand-measured medians of
+# those tags). Val regions are the same as in shards/hot, so this run pairs with the 5-epoch control.
+weights: runs/joint-base-wise-0.3/weights.pt  # relative to the Drive root
+sources: [hot-relabel]
+hyperparameters:
+  num_classes: 2
+  trainable_layers: 0
+  learning_rate: 0.001
+  momentum: 0.9
+  weight_decay: 0.0001
+  l2sp_alpha: 0.0
+  epochs: 5
+  patience: 5
+  min_delta: 0.005
+  batch_size: 4
+  samples_per_epoch: null         # one epoch = the number of train chips, as on the platform
+  schedule: cosine
+  amp: true
+  seed: 42
+  ckpt_every_min: 60
+  keep_last: 5
+  augment:
+    crop_m: [30, 80]
+val:
+  zooms: [20, 19]
+  max_regions: null
+  window_m: 60                    # the tree window hot_platform.yaml and its weight blends were scored at
+  group_window_m: 120
+mlflow: true

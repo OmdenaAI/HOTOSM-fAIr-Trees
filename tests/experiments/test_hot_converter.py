@@ -356,3 +356,28 @@ def test_no_biome_fn_gives_unknown(tmp_path):
     out, stats, _ = run(tmp_path)
     assert set(biomes(out).values()) == {"unknown"}
     assert stats["regions_per_biome"] == {"unknown": 4}
+
+
+def test_relabel_changes_train_labels_only(tmp_path):
+    plain, _, _ = run(tmp_path / "plain")
+    out, stats, _ = run(tmp_path / "relabel", relabel_m={6.0: 8.0})
+    assert stats["relabelled"] == 1 and stats["relabel_m"] == {"6.0": 8.0}
+    # tree 2 (train, 6 m) is an 8 m label in both train regions it touches
+    assert_square(square_for(features(out, "A", "labels"), 2), 2, 8.0)
+    (in_b,) = _by_label(features(out, "B", "labels"), 1)
+    assert_square(utm_shapes([in_b]).iloc[0], 2, 8.0)
+    assert_square(square_for(features(out, "A", "labels"), 1), 1, 3.0)  # 3 m: no key
+    # tree 8 (val, 6 m) keeps its tag as a val label and as a mask in train region B
+    assert_square(square_for(features(out, "C", "labels"), 8), 8, 6.0)
+    other = [f for f in features(out, "B", "ignore") if f["properties"] == {"reason": "other_split"}]
+    assert_square(utm_shapes(other).iloc[0], 8, 6.0)
+    # the val region is written exactly as without relabelling
+    for name in ("labels", "ignore", "region"):
+        suffix = "json" if name == "region" else "geojson"
+        path = f"{REGION['C']}/{name}.{suffix}"
+        assert (out / path).read_text() == (plain / path).read_text()
+
+
+def test_no_relabel_by_default(tmp_path):
+    _, stats, _ = run(tmp_path)
+    assert stats["relabelled"] == 0 and stats["relabel_m"] == {}

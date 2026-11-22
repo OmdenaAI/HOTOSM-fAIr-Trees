@@ -8,12 +8,17 @@ that touches its tiles, so a crown cut by a block edge is labelled on both sides
 features of the region's own split (a group's split is that of the tile under its representative point):
 a crown or group from another split that reaches into a region is masked there instead (HOT's split has no
 buffer).
+
+``relabel_m`` maps exact tag values to the crown side the train labels get instead (the hand-measured gold
+crowns put 1 m tags at about 2.5 m and 2 m tags at about 3.75 m). It changes labels in HOT ``train``
+regions only: val regions, ignore squares and every other split keep the tagged size, so scoring is
+unchanged.
 """
 
 import json
 import logging
 from collections import Counter
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -35,6 +40,8 @@ LICENCE = "CC-BY-4.0 imagery, ODbL-1.0 labels"
 UNKNOWN_SIDE_M = 4.0
 SPLITS = {"train": "train", "validation": "val"}  # HOT split -> region split, for training
 TEST_SPLITS = {"test": "test"}  # HOT test on its own: a held-out benchmark part
+RELABEL_SPLIT = "train"  # the one HOT split whose labels ``relabel_m`` changes
+RELABEL_TOL_M = 1e-6  # a tag matches a ``relabel_m`` key within this
 
 
 @dataclass(frozen=True)
@@ -69,8 +76,11 @@ def _regions(tiles: gpd.GeoDataFrame, block_tiles: int, splits: dict[str, str]) 
     return regions
 
 
-def _crowns(data: HotData) -> tuple[gpd.GeoDataFrame, np.ndarray]:
-    """Squares (EPSG:4326) for the trees outside every group, and the in-group flag of every tree.
+def _crowns(
+    data: HotData, relabel_m: Mapping[float, float] | None = None
+) -> tuple[gpd.GeoDataFrame, np.ndarray, np.ndarray]:
+    """Squares (EPSG:4326) for the trees outside every group, the in-group flag of every tree, and per square
+    its relabelled square (the same square where ``relabel_m`` has no key for its tag).
 
     The squares carry ``split`` and ``known`` (diameter in (0, 30] m: a label; otherwise a 4 m ignore).
     """
@@ -79,13 +89,25 @@ def _crowns(data: HotData) -> tuple[gpd.GeoDataFrame, np.ndarray]:
     in_group[data.groups.to_crs(UTM).sindex.query(trees.geometry, predicate="within")[0]] = True
     trees = trees[~in_group]
     diameter = known_diameter(trees["diameter_m"])
-    squares = trees.geometry.buffer(diameter.fillna(UNKNOWN_SIDE_M).to_numpy() / 2, cap_style="square")
+    side = diameter.fillna(UNKNOWN_SIDE_M).to_numpy()
+    new_side = side.copy()
+    for tag_m, side_m in (relabel_m or {}).items():
+        new_side[np.abs(diameter.to_numpy() - tag_m) <= RELABEL_TOL_M] = side_m
+
+    def squares(sides: np.ndarray) -> np.ndarray:
+        return trees.geometry.buffer(sides / 2, cap_style="square").to_crs("EPSG:4326").to_numpy()
+
     crowns = gpd.GeoDataFrame(
-        {"split": trees["split"].to_numpy(), "known": diameter.notna().to_numpy()},
-        geometry=squares.to_crs("EPSG:4326").to_numpy(),
+        {
+            "split": trees["split"].to_numpy(),
+            "known": diameter.notna().to_numpy(),
+            "relabelled": new_side != side,
+        },
+        geometry=squares(side),
         crs="EPSG:4326",
     )
-    return crowns, in_group
+    relabelled = squares(new_side) if relabel_m else crowns.geometry.to_numpy()
+    return crowns, in_group, relabelled
 
 
 def _touching(features: gpd.GeoDataFrame, regions: list[_Region]) -> list[np.ndarray]:
@@ -200,20 +222,21 @@ def convert(
     biome_fn: Callable[[float, float], str] | None = None,
     block_tiles: int = 16,
     splits: dict[str, str] = SPLITS,
+    relabel_m: Mapping[float, float] | None = None,
 ) -> dict:
     """Write a region per block component and ``stats.json`` into an empty ``out_root``; return the stats.
 
     ``images(hot_split)`` yields ``(tile_id, image_bytes)`` for every tile of a HOT split; each tile is
     written as it arrives, so the images are never all in memory. ``splits`` maps the HOT splits to
     convert to their region split (``TEST_SPLITS`` for the held-out test part); crowns and groups of any
-    other split that reach into a region are masked there.
+    other split that reach into a region are masked there. ``relabel_m``: see the module docstring.
     """
     out_root = Path(out_root)
     if out_root.exists() and any(out_root.iterdir()):
         raise ValueError(f"{out_root}: output directory is not empty; old regions would mix with new ones")
 
     regions = _regions(data.tiles, block_tiles, splits)
-    crowns, in_group = _crowns(data)
+    crowns, in_group, relabelled_squares = _crowns(data, relabel_m)
     groups = data.groups.to_crs("EPSG:4326")
     area_m2 = _write_chips(regions, images, out_root, splits)
     biomes = _biomes(regions, biome_fn)
@@ -226,6 +249,7 @@ def convert(
     group_shapes = groups.geometry.to_numpy()
     group_split = _group_splits(groups, data.tiles)
     labelled, unknown, other_split, group_labels, other_groups = set(), set(), set(), set(), set()
+    relabelled = set()
     for region, crown_idx, group_idx in zip(
         regions, _touching(crowns, regions), _touching(groups, regions), strict=True
     ):
@@ -242,7 +266,11 @@ def convert(
         other_groups.update(other_group_idx)
 
         properties = {"source": SOURCE, "licence": LICENCE, "region": region.id}
-        labels = [_feature(g, {"label": 1, **properties}) for g in squares[label_idx]]
+        label_squares = squares
+        if region.hot_split == RELABEL_SPLIT:
+            label_squares = relabelled_squares
+            relabelled.update(label_idx[crowns["relabelled"].to_numpy()[label_idx]])
+        labels = [_feature(g, {"label": 1, **properties}) for g in label_squares[label_idx]]
         labels += [_feature(g, {"label": 2, **properties}) for g in group_shapes[own_group_idx]]
         ignore = [_feature(g, {"reason": "other_split_group"}) for g in group_shapes[other_group_idx]]
         ignore += [_feature(g, {"reason": "unknown_diameter"}) for g in squares[unknown_idx]]
@@ -264,6 +292,8 @@ def convert(
         "chips": chips_per_split,
         "regions_per_biome": dict(Counter(biomes.values())),
         "boxes": len(labelled),
+        "relabelled": len(relabelled),
+        "relabel_m": {str(k): v for k, v in (relabel_m or {}).items()},
         "ignored_unknown_diameter": len(unknown),
         "masked_other_split": len(other_split),
         "trees_in_groups": int((in_group & data.trees["split"].isin(list(splits)).to_numpy()).sum()),
