@@ -163,3 +163,35 @@ def test_score_units_decodes_once_and_scores_placed_trees(fake_session):
     (tree,) = out["trees"]
     assert tree["gold_hit"] and tree["point_hit"] and not tree["tag_hit"]
     assert out["summary"]["all"]["gold_recall"] == 1.0
+
+
+def test_run_gold_score_threshold_override_and_empty_part(tmp_path, monkeypatch, fake_session):
+    import json
+
+    from experiments import recall_check
+    from experiments.gold_score import run_gold_score
+    from fair_trees.params import InferenceParams
+    from fair_trees.serve import ort_run_fn
+
+    run = ort_run_fn(fake_session({(50 * 100 + 50) * 9 + 3: 5.0}))
+    unit = _unit()
+    unit.mosaic.rgb[:] = 120
+    units = [unit]
+    monkeypatch.setattr(
+        recall_check, "run_units", lambda *a, **k: (tmp_path, InferenceParams(), units, run, 0.999)
+    )
+    monkeypatch.setattr(
+        "experiments.gold_score.load_gold", lambda *a: [_gold("a", 128, 128, box=(-5, -5, 5, 5))]
+    )
+
+    picked = run_gold_score("r", tmp_path / "m.csv", tmp_path / "b.csv")
+    assert picked["threshold"] == 0.999 and picked["summary"]["all"]["gold_recall"] == 0.0
+    fixed = run_gold_score("r", tmp_path / "m.csv", tmp_path / "b.csv", threshold=0.2)
+    assert fixed["threshold"] == 0.2 and fixed["picked_threshold"] == 0.999
+    assert fixed["summary"]["all"]["gold_recall"] == 1.0
+    assert json.loads((tmp_path / "gold_score_val_t0.2.json").read_text())["threshold"] == 0.2
+    assert (tmp_path / "gold_score_val.json").is_file()
+
+    units.clear()
+    with pytest.raises(ValueError, match="no units"):
+        run_gold_score("r", tmp_path / "m.csv", tmp_path / "b.csv")

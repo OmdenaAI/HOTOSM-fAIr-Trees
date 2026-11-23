@@ -203,20 +203,30 @@ def run_gold_score(
     boxes: Path,
     *,
     part: str = "val",
+    threshold: float | None = None,
     drive_root=None,
     data_root=None,
     benchmark=None,
 ) -> dict:
-    """``score_units`` on a run's ``best.pt``: its val regions, or a frozen benchmark region part."""
+    """``score_units`` on a run's ``best.pt``: its val regions, or a frozen benchmark region part.
+
+    ``threshold`` replaces the run's picked tree threshold (to compare runs at one threshold); the result
+    then goes to ``gold_score_<part>_t<threshold>.json`` so the picked one is kept."""
     from experiments.recall_check import run_units
 
-    out_dir, params, units, run_fn, threshold = run_units(
+    out_dir, params, units, run_fn, picked = run_units(
         run_id, part=part, drive_root=drive_root, data_root=data_root, benchmark=benchmark
     )
-    result = {"run_id": run_id, "part": part} | score_units(
-        run_fn, units, params, threshold, load_gold(manifest, boxes)
+    if not units:
+        raise ValueError(
+            f"{run_id} {part}: no units; stage the run's sources (and hot-test for the test part)"
+        )
+    used = picked if threshold is None else threshold
+    result = {"run_id": run_id, "part": part, "picked_threshold": float(picked)} | score_units(
+        run_fn, units, params, used, load_gold(manifest, boxes)
     )
-    (out_dir / f"gold_score_{part}.json").write_text(json.dumps(result, indent=2))
+    name = f"gold_score_{part}.json" if threshold is None else f"gold_score_{part}_t{threshold:g}.json"
+    (out_dir / name).write_text(json.dumps(result, indent=2))
     return result
 
 
@@ -248,8 +258,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("manifest", type=Path)
     parser.add_argument("boxes", type=Path)
     parser.add_argument("--part", default="val")
+    parser.add_argument("--threshold", type=float, default=None, help="instead of the run's picked one")
     args = parser.parse_args(argv)
-    print("\n".join(report_lines(run_gold_score(args.run_id, args.manifest, args.boxes, part=args.part))))
+    result = run_gold_score(args.run_id, args.manifest, args.boxes, part=args.part, threshold=args.threshold)
+    print("\n".join(report_lines(result)))
 
 
 if __name__ == "__main__":
