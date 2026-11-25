@@ -13,8 +13,15 @@ buffer).
 crowns put 1 m tags at about 2.5 m and 2 m tags at about 3.75 m). It changes labels in HOT ``train``
 regions only: val regions, ignore squares and every other split keep the tagged size, so scoring is
 unchanged.
+
+``relabeled_boxes`` (osm_id -> ``RelabeledBox``, see ``read_relabeled_boxes``) gives every tree outside the
+groups its hand-drawn crown box instead, in every converted split: ``box`` becomes the label (unknown tags
+included), ``cant_tell`` and ``merged`` become ignore squares of the tagged side (4 m when unknown), and
+``not_a_tree`` gets nothing, so its point counts as background. Groups, regions, chips and masks are
+unchanged.
 """
 
+import csv
 import json
 import logging
 from collections import Counter
@@ -42,6 +49,36 @@ SPLITS = {"train": "train", "validation": "val"}  # HOT split -> region split, f
 TEST_SPLITS = {"test": "test"}  # HOT test on its own: a held-out benchmark part
 RELABEL_SPLIT = "train"  # the one HOT split whose labels ``relabel_m`` changes
 RELABEL_TOL_M = 1e-6  # a tag matches a ``relabel_m`` key within this
+UNKNOWN_DIAMETER = "unknown_diameter"
+# status -> ignore reason
+RELABELED_IGNORE = {"cant_tell": "relabeled_cant_tell", "merged": "relabeled_merged"}
+NOT_A_TREE = "not_a_tree"
+RELABELED_STATUSES = ("box", NOT_A_TREE, *RELABELED_IGNORE)
+
+
+@dataclass(frozen=True)
+class RelabeledBox:
+    status: str  # one of RELABELED_STATUSES
+    bounds: tuple[float, float, float, float] | None  # EPSG:4326 west, south, east, north; only for a box
+
+
+def read_relabeled_boxes(path: Path) -> dict[int, RelabeledBox]:
+    """``osm_id,status,west,south,east,north`` rows (bounds empty unless the status is ``box``) by osm_id."""
+    boxes = {}
+    with Path(path).open(newline="") as f:
+        for row in csv.DictReader(f):
+            status, osm_id = row["status"], int(row["osm_id"])
+            if status not in RELABELED_STATUSES:
+                raise ValueError(f"{path}: osm_id {osm_id}: unknown status {status!r}")
+            if osm_id in boxes:
+                raise ValueError(f"{path}: osm_id {osm_id} appears twice")
+            bounds = None
+            if status == "box":
+                bounds = tuple(float(row[k]) for k in ("west", "south", "east", "north"))
+                if not (bounds[0] < bounds[2] and bounds[1] < bounds[3]):
+                    raise ValueError(f"{path}: osm_id {osm_id}: empty box {bounds}")
+            boxes[osm_id] = RelabeledBox(status, bounds)
+    return boxes
 
 
 @dataclass(frozen=True)
@@ -77,12 +114,17 @@ def _regions(tiles: gpd.GeoDataFrame, block_tiles: int, splits: dict[str, str]) 
 
 
 def _crowns(
-    data: HotData, relabel_m: Mapping[float, float] | None = None
-) -> tuple[gpd.GeoDataFrame, np.ndarray, np.ndarray]:
-    """Squares (EPSG:4326) for the trees outside every group, the in-group flag of every tree, and per square
-    its relabelled square (the same square where ``relabel_m`` has no key for its tag).
+    data: HotData,
+    relabel_m: Mapping[float, float] | None = None,
+    relabeled_boxes: Mapping[int, RelabeledBox] | None = None,
+) -> tuple[gpd.GeoDataFrame, np.ndarray, np.ndarray, np.ndarray]:
+    """Squares (EPSG:4326) for the trees outside every group, the in-group flag of every tree, per square its
+    relabelled square (the same square where ``relabel_m`` has no key for its tag), and the HOT split of
+    each dropped ``not_a_tree`` tree.
 
-    The squares carry ``split`` and ``known`` (diameter in (0, 30] m: a label; otherwise a 4 m ignore).
+    The squares carry ``split``, ``reason`` (None: a label; else why it is an ignore square) and ``known``
+    (a label). Without ``relabeled_boxes`` a label is a diameter in (0, 30] m, otherwise a 4 m ignore; with
+    them, a ``box`` tree's shape is its drawn box (see the module docstring).
     """
     trees = data.trees.to_crs(UTM)
     in_group = np.zeros(len(trees), bool)
@@ -90,6 +132,7 @@ def _crowns(
     trees = trees[~in_group]
     diameter = known_diameter(trees["diameter_m"])
     side = diameter.fillna(UNKNOWN_SIDE_M).to_numpy()
+    reason = np.where(diameter.notna().to_numpy(), None, UNKNOWN_DIAMETER).astype(object)
     new_side = side.copy()
     for tag_m, side_m in (relabel_m or {}).items():
         new_side[np.abs(diameter.to_numpy() - tag_m) <= RELABEL_TOL_M] = side_m
@@ -97,17 +140,33 @@ def _crowns(
     def squares(sides: np.ndarray) -> np.ndarray:
         return trees.geometry.buffer(sides / 2, cap_style="square").to_crs("EPSG:4326").to_numpy()
 
+    shapes = squares(side)
+    keep = np.ones(len(trees), bool)
+    if relabeled_boxes is not None:
+        osm_ids = trees["osm_id"].to_numpy()
+        missing = [i for i in osm_ids if i not in relabeled_boxes]
+        if missing:
+            raise ValueError(
+                f"{len(missing)} trees outside groups have no relabeled record, e.g. {missing[0]}"
+            )
+        status = np.array([relabeled_boxes[i].status for i in osm_ids], dtype=object)
+        is_box = status == "box"
+        shapes[is_box] = [shapely.box(*relabeled_boxes[i].bounds) for i in osm_ids[is_box]]
+        reason = np.array([None if s == "box" else RELABELED_IGNORE.get(s) for s in status], dtype=object)
+        keep = status != NOT_A_TREE
+
     crowns = gpd.GeoDataFrame(
         {
             "split": trees["split"].to_numpy(),
-            "known": diameter.notna().to_numpy(),
+            "reason": reason,
+            "known": np.array([r is None for r in reason], bool),
             "relabelled": new_side != side,
         },
-        geometry=squares(side),
+        geometry=shapes,
         crs="EPSG:4326",
     )
     relabelled = squares(new_side) if relabel_m else crowns.geometry.to_numpy()
-    return crowns, in_group, relabelled
+    return crowns[keep].reset_index(drop=True), in_group, relabelled[keep], trees["split"].to_numpy()[~keep]
 
 
 def _touching(features: gpd.GeoDataFrame, regions: list[_Region]) -> list[np.ndarray]:
@@ -223,28 +282,34 @@ def convert(
     block_tiles: int = 16,
     splits: dict[str, str] = SPLITS,
     relabel_m: Mapping[float, float] | None = None,
+    relabeled_boxes: Mapping[int, RelabeledBox] | None = None,
 ) -> dict:
     """Write a region per block component and ``stats.json`` into an empty ``out_root``; return the stats.
 
     ``images(hot_split)`` yields ``(tile_id, image_bytes)`` for every tile of a HOT split; each tile is
     written as it arrives, so the images are never all in memory. ``splits`` maps the HOT splits to
     convert to their region split (``TEST_SPLITS`` for the held-out test part); crowns and groups of any
-    other split that reach into a region are masked there. ``relabel_m``: see the module docstring.
+    other split that reach into a region are masked there. ``relabel_m`` and ``relabeled_boxes``
+    (one at most): see the module docstring.
     """
+    if relabel_m and relabeled_boxes is not None:
+        raise ValueError("relabel_m and relabeled_boxes both change tree labels: pass one")
+    relabeled_ignore = set(RELABELED_IGNORE.values())
     out_root = Path(out_root)
     if out_root.exists() and any(out_root.iterdir()):
         raise ValueError(f"{out_root}: output directory is not empty; old regions would mix with new ones")
 
     regions = _regions(data.tiles, block_tiles, splits)
-    crowns, in_group, relabelled_squares = _crowns(data, relabel_m)
+    crowns, in_group, relabelled_squares, dropped_split = _crowns(data, relabel_m, relabeled_boxes)
     groups = data.groups.to_crs("EPSG:4326")
     area_m2 = _write_chips(regions, images, out_root, splits)
     biomes = _biomes(regions, biome_fn)
 
-    squares, known, tree_split = (
+    squares, known, tree_split, reasons = (
         crowns.geometry.to_numpy(),
         crowns["known"].to_numpy(),
         crowns["split"].to_numpy(),
+        crowns["reason"].to_numpy(),
     )
     group_shapes = groups.geometry.to_numpy()
     group_split = _group_splits(groups, data.tiles)
@@ -273,7 +338,7 @@ def convert(
         labels = [_feature(g, {"label": 1, **properties}) for g in label_squares[label_idx]]
         labels += [_feature(g, {"label": 2, **properties}) for g in group_shapes[own_group_idx]]
         ignore = [_feature(g, {"reason": "other_split_group"}) for g in group_shapes[other_group_idx]]
-        ignore += [_feature(g, {"reason": "unknown_diameter"}) for g in squares[unknown_idx]]
+        ignore += [_feature(squares[i], {"reason": reasons[i]}) for i in unknown_idx]
         ignore += [_feature(g, {"reason": "other_split"}) for g in squares[other_idx]]
         split = splits[region.hot_split]
         _write_region(out_root, region, labels, ignore, area_m2[region.id], biomes[region.id], split)
@@ -294,7 +359,12 @@ def convert(
         "boxes": len(labelled),
         "relabelled": len(relabelled),
         "relabel_m": {str(k): v for k, v in (relabel_m or {}).items()},
-        "ignored_unknown_diameter": len(unknown),
+        "ignored_unknown_diameter": sum(reasons[i] == UNKNOWN_DIAMETER for i in unknown),
+        "relabeled_boxes": relabeled_boxes is not None,
+        "ignored_relabeled": dict(
+            sorted(Counter(reasons[i] for i in unknown if reasons[i] in relabeled_ignore).items())
+        ),
+        "dropped_not_a_tree": int(np.isin(dropped_split, list(splits)).sum()),
         "masked_other_split": len(other_split),
         "trees_in_groups": int((in_group & data.trees["split"].isin(list(splits)).to_numpy()).sum()),
         "group_labels": len(group_labels),

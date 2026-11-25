@@ -9,7 +9,7 @@ gpd = pytest.importorskip("geopandas")
 
 from shapely.geometry import Point, box, shape  # noqa: E402
 
-from experiments.converters.hot import convert  # noqa: E402
+from experiments.converters.hot import RelabeledBox, convert, read_relabeled_boxes  # noqa: E402
 from experiments.label_study.hot import UTM, HotData  # noqa: E402
 from fair_trees.dataset import load_regions  # noqa: E402
 from fair_trees.georef import tile_bounds_4326, true_gsd  # noqa: E402
@@ -381,3 +381,106 @@ def test_relabel_changes_train_labels_only(tmp_path):
 def test_no_relabel_by_default(tmp_path):
     _, stats, _ = run(tmp_path)
     assert stats["relabelled"] == 0 and stats["relabel_m"] == {}
+
+
+def drawn(osm_id, east_m, north_m):
+    """An EPSG:4326 box ``east_m`` x ``north_m`` around the tree, off-centre by 0.5 m east."""
+    p = utm_point(osm_id)
+    utm = box(p.x - east_m / 2 + 0.5, p.y - north_m / 2, p.x + east_m / 2 + 0.5, p.y + north_m / 2)
+    return gpd.GeoSeries([utm], crs=UTM).to_crs("EPSG:4326").iloc[0].bounds
+
+
+def relabeled_records():
+    return {
+        1: RelabeledBox("box", drawn(1, 2.0, 5.0)),
+        2: RelabeledBox("not_a_tree", None),  # its 6 m square reached into B
+        3: RelabeledBox("box", drawn(3, 3.0, 3.0)),  # no tag: the drawn box is a label
+        4: RelabeledBox("cant_tell", None),  # 0 m tag
+        5: RelabeledBox("merged", None),  # 31 m tag
+        7: RelabeledBox("box", drawn(7, 4.0, 4.0)),
+        8: RelabeledBox("box", drawn(8, 7.0, 6.0)),  # val, reaches into train region B
+        9: RelabeledBox("box", drawn(9, 3.0, 3.0)),  # test
+    }  # tree 6 is inside a group: no record needed
+
+
+def has_box(feats, bounds):
+    return sum(shape(f["geometry"]).bounds == pytest.approx(bounds, abs=1e-12) for f in feats)
+
+
+def test_relabeled_boxes_replace_the_tag_squares_in_every_split(tmp_path):
+    records = relabeled_records()
+    out, stats, _ = run(tmp_path, relabeled_boxes=records)
+    a_trees = _by_label(features(out, "A", "labels"), 1)
+    assert len(a_trees) == 1 and has_box(a_trees, records[1].bounds) == 1
+    b_trees = _by_label(features(out, "B", "labels"), 1)
+    assert len(b_trees) == 1 and has_box(b_trees, records[3].bounds) == 1  # tree 2 is dropped
+    c_trees = _by_label(features(out, "C", "labels"), 1)
+    assert has_box(c_trees, records[7].bounds) == 1 and has_box(c_trees, records[8].bounds) == 1
+    other = [f for f in features(out, "B", "ignore") if f["properties"] == {"reason": "other_split"}]
+    assert len(other) == 1 and has_box(other, records[8].bounds) == 1
+    test_out, _, _ = run(tmp_path / "test", relabeled_boxes=records, splits={"test": "test"})
+    [region] = load_regions(test_out)
+    labels = json.loads((test_out / region.id / "labels.geojson").read_text())["features"]
+    assert has_box(_by_label(labels, 1), records[9].bounds) == 1
+
+
+def test_relabeled_cant_tell_and_merged_are_ignore_squares_and_not_a_tree_is_nothing(tmp_path):
+    out, stats, _ = run(tmp_path, relabeled_boxes=relabeled_records())
+    ignore = features(out, "B", "ignore")
+    reasons = sorted(f["properties"]["reason"] for f in ignore)
+    assert reasons == ["other_split", "relabeled_cant_tell", "relabeled_merged"]
+    for osm_id, reason in ((4, "relabeled_cant_tell"), (5, "relabeled_merged")):
+        assert_square(
+            square_for([f for f in ignore if f["properties"]["reason"] == reason], osm_id), osm_id, 4.0
+        )
+    tree_2 = utm_point(2)
+    for name in "AB":
+        for kind in ("labels", "ignore"):
+            feats = [f for f in features(out, name, kind) if f["properties"].get("label") != 2]
+            assert all(s.distance(tree_2) > 0.5 for s in utm_shapes(feats)) if feats else True
+    assert stats["relabeled_boxes"] is True
+    assert stats["boxes"] == 4  # trees 1, 3, 7, 8
+    assert stats["ignored_unknown_diameter"] == 0
+    assert stats["ignored_relabeled"] == {"relabeled_cant_tell": 1, "relabeled_merged": 1}
+    assert stats["dropped_not_a_tree"] == 1
+
+
+def test_relabeled_boxes_keep_groups_regions_and_chips(tmp_path):
+    plain, plain_stats, _ = run(tmp_path / "plain")
+    out, stats, _ = run(tmp_path / "relabeled", relabeled_boxes=relabeled_records())
+    for name in REGION:
+        assert _by_label(features(out, name, "labels"), 2) == _by_label(features(plain, name, "labels"), 2)
+        path = f"{REGION[name]}/region.json"
+        assert (out / path).read_text() == (plain / path).read_text()
+    same = ("regions", "chips", "regions_per_biome", "trees_in_groups", "group_labels", "val_share")
+    assert {k: stats[k] for k in same} == {k: plain_stats[k] for k in same}
+    assert plain_stats["relabeled_boxes"] is False and plain_stats["dropped_not_a_tree"] == 0
+
+
+def test_relabeled_boxes_must_cover_every_tree_outside_groups(tmp_path):
+    records = relabeled_records()
+    del records[7]
+    with pytest.raises(ValueError, match="no relabeled record, e.g. 7"):
+        run(tmp_path, relabeled_boxes=records)
+
+
+def test_relabeled_boxes_and_relabel_m_are_exclusive(tmp_path):
+    with pytest.raises(ValueError, match="pass one"):
+        run(tmp_path, relabeled_boxes=relabeled_records(), relabel_m={6.0: 8.0})
+
+
+def test_read_relabeled_boxes(tmp_path):
+    path = tmp_path / "boxes.csv"
+    path.write_text("osm_id,status,west,south,east,north\n1,box,-13.2,8.4,-13.1,8.5\n2,merged,,,,\n")
+    assert read_relabeled_boxes(path) == {
+        1: RelabeledBox("box", (-13.2, 8.4, -13.1, 8.5)),
+        2: RelabeledBox("merged", None),
+    }
+    for bad, match in (
+        ("3,tree,,,,\n", "unknown status"),
+        ("1,cant_tell,,,,\n", "appears twice"),
+        ("3,box,-13.1,8.4,-13.2,8.5\n", "empty box"),
+    ):
+        path.write_text("osm_id,status,west,south,east,north\n1,box,-13.2,8.4,-13.1,8.5\n" + bad)
+        with pytest.raises(ValueError, match=match):
+            read_relabeled_boxes(path)
